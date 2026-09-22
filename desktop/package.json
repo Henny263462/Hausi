@@ -1,0 +1,13 @@
+{
+	"name": "hausi-desktop",
+	"private": true,
+	"version": "0.1.0",
+	"main": "main.cjs",
+	"scripts": {
+		"start": "electron .",
+		"dev": "set HAUSI_DEV=1&& electron ."
+	},
+	"devDependencies": {
+		"electron": "^37.3.1"
+	}
+}

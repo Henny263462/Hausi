@@ -1,0 +1,10 @@
+{
+	"name": "hausi",
+	"private": true,
+	"scripts": {
+		"dev": "npm run dev --prefix web",
+		"desktop": "npm run dev --prefix desktop",
+		"build": "npm run build --prefix web",
+		"start": "npm run build && npm start --prefix desktop"
+	}
+}
