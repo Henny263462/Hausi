@@ -1,4 +1,6 @@
 <script lang="ts">
+	import BookOpen from '@lucide/svelte/icons/book-open';
+	import CalendarDays from '@lucide/svelte/icons/calendar-days';
 	import CalendarRange from '@lucide/svelte/icons/calendar-range';
 	import Check from '@lucide/svelte/icons/check';
 	import Info from '@lucide/svelte/icons/info';
@@ -25,8 +27,10 @@
 	const links: { href: string; label: string; icon: Component; count?: () => number }[] = [
 		{ href: '/app', label: 'Heute', icon: SunMedium },
 		{ href: '/app/aufgaben', label: 'Aufgaben', icon: ListChecks, count: () => hausi.openTasks.length },
-		{ href: '/app/notizen', label: 'Notizen', icon: NotebookPen, count: () => hausi.notes.length },
+		{ href: '/app/notizen', label: 'Notizen', icon: NotebookPen, count: () => hausi.bookNotes.length },
+		{ href: '/app/kalender', label: 'Kalender', icon: CalendarDays, count: () => hausi.bookEvents.length },
 		{ href: '/app/stundenplan', label: 'Stundenplan', icon: CalendarRange },
+		{ href: '/app/buecher', label: 'Bücher', icon: BookOpen },
 		{ href: '/app/einstellungen', label: 'Einstellungen', icon: Settings }
 	];
 
@@ -86,6 +90,21 @@
 			<button type="button" class="btn btn-ghost btn-icon mx-auto mb-2 size-9" onclick={toggleRail} title="Ausklappen">
 				<PanelLeft class="size-4" />
 			</button>
+		{/if}
+
+		{#if open && hausi.books.length}
+			<label class="mb-3 block px-0.5">
+				<span class="eyebrow mb-1.5 block px-1">Buch</span>
+				<select
+					class="field h-9 text-xs"
+					value={hausi.activeBook?.$id ?? ''}
+					onchange={(event) => hausi.setActiveBook(event.currentTarget.value)}
+				>
+					{#each hausi.books as book}
+						<option value={book.$id}>{book.kind === 'private' ? 'Privat' : book.name}</option>
+					{/each}
+				</select>
+			</label>
 		{/if}
 
 		<button
@@ -179,7 +198,7 @@
 	</main>
 
 	<nav class="bg-background/90 fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-		{#each links as link}
+		{#each links.filter((link) => !['/app/stundenplan', '/app/buecher'].includes(link.href)) as link}
 			{@const Icon = link.icon}
 			<a
 				href={link.href}
@@ -188,7 +207,7 @@
 					: 'text-muted-foreground'}"
 			>
 				<Icon class="size-[18px]" />
-				{link.label === 'Einstellungen' ? 'Mehr' : link.label === 'Stundenplan' ? 'Plan' : link.label}
+				{link.label === 'Einstellungen' ? 'Mehr' : link.label}
 			</a>
 		{/each}
 	</nav>

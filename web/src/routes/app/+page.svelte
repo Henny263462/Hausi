@@ -38,7 +38,8 @@
 		hausi.openTasks.filter((task) => isToday(task.remindAt) || (!task.remindAt && todaySubjects.has(task.subject)))
 	);
 	const rest = $derived(hausi.openTasks.filter((task) => !dueToday.includes(task)).slice(0, 6));
-	const doneCount = $derived(hausi.tasks.filter((task) => task.done).length);
+	const doneCount = $derived(hausi.bookTasks.filter((task) => task.done).length);
+	const todayEvents = $derived(hausi.bookEvents.filter((item) => isToday(item.startsAt)));
 	const firstName = $derived(hausi.user?.name?.split(' ')[0] ?? '');
 
 	const progress = $derived(
@@ -108,6 +109,7 @@
 						<Plus class="size-3.5" /> Aufgabe{current ? ` für ${current.subject}` : ''}
 					</button>
 					<a href="/app/stundenplan" class="btn btn-sm hover:bg-current/10">Wochenplan</a>
+					<a href="/app/kalender" class="btn btn-sm hover:bg-current/10">Kalender</a>
 				</div>
 			</section>
 
@@ -119,6 +121,21 @@
 					</a>
 				{/each}
 			</div>
+
+			{#if todayEvents.length}
+				<section class="card rise p-2">
+					<div class="flex items-center justify-between px-3 pt-2.5 pb-1.5">
+						<h3 class="text-sm font-semibold">Termine heute</h3>
+						<a href="/app/kalender" class="text-muted-foreground hover:text-foreground text-xs">Kalender</a>
+					</div>
+					{#each todayEvents as item (item.$id)}
+						<a href="/app/kalender" class="hover:bg-accent/70 block rounded-xl px-3 py-2.5">
+							<span class="block truncate text-sm font-medium">{item.title}</span>
+							<span class="text-muted-foreground text-xs">{item.kind === 'exam' ? 'Klassenarbeit' : 'Termin'}{#if item.subject} · {item.subject}{/if}</span>
+						</a>
+					{/each}
+				</section>
+			{/if}
 
 			<section class="card rise p-2">
 				<div class="flex items-center justify-between px-3 pt-2.5 pb-1.5">

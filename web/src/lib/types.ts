@@ -6,6 +6,7 @@ export type Profile = {
 	name: string;
 	premium: boolean;
 	activeTimetableId: string;
+	activeBookId: string;
 };
 
 export type Period = {
@@ -34,10 +35,20 @@ export type Lesson = {
 	color: string;
 };
 
+export type Book = {
+	$id: string;
+	userId: string;
+	name: string;
+	kind: 'private' | 'shared';
+	teamId: string;
+	inviteCode: string;
+};
+
 export type Task = {
 	$id: string;
 	$createdAt: string;
 	userId: string;
+	bookId: string;
 	title: string;
 	details: string;
 	subject: string;
@@ -56,6 +67,7 @@ export type Share = {
 	$id: string;
 	userId: string;
 	taskId: string;
+	kind: 'task' | 'note';
 	title: string;
 	details: string;
 	subject: string;
@@ -66,9 +78,22 @@ export type Note = {
 	$id: string;
 	$createdAt: string;
 	userId: string;
+	bookId: string;
 	title: string;
 	body: string;
 	subject: string;
+	pending?: boolean;
+};
+
+export type CalEvent = {
+	$id: string;
+	userId: string;
+	bookId: string;
+	title: string;
+	details: string;
+	subject: string;
+	startsAt: string;
+	kind: 'exam' | 'event';
 	pending?: boolean;
 };
 

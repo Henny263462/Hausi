@@ -1,10 +1,12 @@
 <script lang="ts">
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import CloudOff from '@lucide/svelte/icons/cloud-off';
+	import Copy from '@lucide/svelte/icons/copy';
 	import NotebookPen from '@lucide/svelte/icons/notebook-pen';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Search from '@lucide/svelte/icons/search';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { Switch } from '$lib/components/ui/switch';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { hausi } from '$lib/store.svelte';
 
@@ -16,11 +18,13 @@
 	let saved = $state<'idle' | 'saving' | 'saved'>('idle');
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
-	const current = $derived(hausi.notes.find((note) => note.$id === selected) ?? null);
+	const current = $derived(hausi.bookNotes.find((note) => note.$id === selected) ?? null);
+	const share = $derived(current ? hausi.shareOf(current.$id, 'note') : null);
+	let sharing = $state(false);
 	const filtered = $derived.by(() => {
 		const needle = query.trim().toLowerCase();
-		if (!needle) return hausi.notes;
-		return hausi.notes.filter(
+		if (!needle) return hausi.bookNotes;
+		return hausi.bookNotes.filter(
 			(note) =>
 				note.title.toLowerCase().includes(needle) ||
 				note.body.toLowerCase().includes(needle) ||
@@ -52,7 +56,7 @@
 
 	async function createNote() {
 		const pending = hausi.createNote({ title: 'Neue Notiz', body: '', subject: '' });
-		selected = hausi.notes[0]?.$id ?? null;
+		selected = hausi.bookNotes[0]?.$id ?? null;
 		await pending;
 	}
 
@@ -116,6 +120,42 @@
 				<span class="text-muted-foreground ml-auto text-xs">
 					{saved === 'saving' ? 'Speichert…' : saved === 'saved' ? 'Gespeichert' : ''}
 				</span>
+				<Switch
+					checked={!!share}
+					disabled={sharing || current.pending || !hausi.online}
+					onCheckedChange={async (value) => {
+						if (sharing) return;
+						sharing = true;
+						try {
+							if (value) {
+								const url = await hausi.shareNote({ ...current, title, body });
+								if (url) {
+									await navigator.clipboard.writeText(url);
+									hausi.ping('Link kopiert.');
+								}
+							} else {
+								await hausi.revokeShare(current.$id, 'note');
+							}
+						} catch {
+							hausi.ping('Teilen hat nicht geklappt.', 'warn');
+						} finally {
+							sharing = false;
+						}
+					}}
+				/>
+				<button
+					type="button"
+					class="btn btn-ghost btn-icon size-8"
+					title="Link kopieren"
+					disabled={!share}
+					onclick={async () => {
+						if (!share) return;
+						await navigator.clipboard.writeText(hausi.shareLink(share.$id));
+						hausi.ping('Link kopiert.');
+					}}
+				>
+					<Copy class="size-4" />
+				</button>
 				<button
 					type="button"
 					class="btn btn-ghost btn-icon size-8"

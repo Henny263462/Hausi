@@ -58,7 +58,7 @@
 					hausi.ping('Link kopiert.');
 				}
 			} else {
-				await hausi.revokeShare(task);
+				await hausi.revokeShare(task.$id, 'task', task.fileIds);
 			}
 		} catch {
 			hausi.ping('Teilen hat nicht geklappt.', 'warn');

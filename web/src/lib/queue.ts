@@ -7,8 +7,8 @@ type Base = { id: string; at?: number };
 
 export type QueueOp = Base &
 	(
-		| { kind: 'task'; rowId?: string; payload: Record<string, unknown>; files: LocalFile[] }
-		| { kind: 'create'; table: string; rowId: string; data: Record<string, unknown>; shared?: boolean }
+		| { kind: 'task'; rowId?: string; payload: Record<string, unknown>; files: LocalFile[]; permissions?: string[] }
+		| { kind: 'create'; table: string; rowId: string; data: Record<string, unknown>; permissions?: string[] }
 		| { kind: 'update'; table: string; rowId: string; data: Record<string, unknown> }
 		| { kind: 'delete'; table: string; rowId: string }
 		| { kind: 'note'; payload: Record<string, unknown> }

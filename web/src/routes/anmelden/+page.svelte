@@ -2,6 +2,7 @@
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
 	import WifiOff from '@lucide/svelte/icons/wifi-off';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { hausi } from '$lib/store.svelte';
 
 	let mode = $state<'login' | 'register'>('login');
@@ -12,7 +13,7 @@
 	let pending = $state(false);
 
 	$effect(() => {
-		if (hausi.ready && hausi.user) goto('/app');
+		if (hausi.ready && hausi.user) goto(page.url.searchParams.get('next') || '/app');
 	});
 
 	async function submit(event: SubmitEvent) {
@@ -26,7 +27,7 @@
 		try {
 			if (mode === 'register') await hausi.register(name.trim(), email.trim(), password);
 			else await hausi.login(email.trim(), password);
-			goto('/app');
+			goto(page.url.searchParams.get('next') || '/app');
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : '';
 			error = message.includes('Invalid credentials')

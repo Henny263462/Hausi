@@ -26,6 +26,11 @@
 			goto('/anmelden');
 			return;
 		}
+		if (share.kind === 'note') {
+			await hausi.adoptShare(share);
+			goto('/app/notizen');
+			return;
+		}
 		if (!hausi.hasSchedule) {
 			hausi.ping('Zuerst einen Stundenplan.', 'warn');
 			goto('/app/stundenplan');
@@ -57,7 +62,7 @@
 			<h1 class="text-lg font-semibold">Dieser Link ist nicht mehr gültig.</h1>
 			<p class="text-muted-foreground mt-1 text-sm">Die Aufgabe wurde gelöscht oder nicht mehr geteilt.</p>
 		{:else}
-			<p class="eyebrow">Geteilte Aufgabe</p>
+			<p class="eyebrow">{share.kind === 'note' ? 'Geteilte Notiz' : 'Geteilte Aufgabe'}</p>
 			<div class="mt-3 flex items-center gap-2">
 				<span class="chip">{share.subject || 'Ohne Fach'}</span>
 			</div>
@@ -81,7 +86,7 @@
 			{/if}
 			<div class="mt-6 flex gap-2">
 				<button type="button" class="btn btn-primary flex-1" onclick={take} disabled={taking}>
-					{taking ? 'Wird übernommen …' : 'In meine Aufgaben'}
+					{taking ? 'Wird übernommen …' : share.kind === 'note' ? 'In meine Notizen' : 'In meine Aufgaben'}
 				</button>
 				<a class="btn btn-outline" href="/app">Hausi öffnen</a>
 			</div>

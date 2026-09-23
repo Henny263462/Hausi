@@ -15,7 +15,7 @@
 
 	const visible = $derived.by(() => {
 		const needle = query.trim().toLowerCase();
-		return hausi.tasks
+		return hausi.bookTasks
 			.filter((task) => task.done === showDone && !hausi.isExpired(task))
 			.filter(
 				(task) =>
@@ -68,7 +68,7 @@
 <PageHeader
 	eyebrow="Übersicht"
 	title="Aufgaben"
-	description="{hausi.openTasks.length} offen · {hausi.tasks.filter((task) => task.done).length} erledigt"
+	description="{hausi.openTasks.length} offen · {hausi.bookTasks.filter((task) => task.done).length} erledigt"
 >
 	{#snippet actions()}
 		<button type="button" class="btn btn-primary" disabled={!hausi.hasSchedule} onclick={openCapture}>

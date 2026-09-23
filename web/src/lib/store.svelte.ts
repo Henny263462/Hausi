@@ -1,9 +1,9 @@
 import { ID, Permission, Query, Role } from 'appwrite';
-import { account, Channel, realtime, storage, tables } from './appwrite';
-import { BUCKET_ID, DATABASE_ID, FREE_RETENTION_DAYS, TABLES } from './config';
+import { account, Channel, functions, realtime, storage, tables, teams } from './appwrite';
+import { BUCKET_ID, DATABASE_ID, FREE_RETENTION_DAYS, JOIN_BOOK_FN, TABLES } from './config';
 import { clearQueue, enqueue, listQueue, queueCount, removeQueued, type QueueOp } from './queue';
 import { parsePeriods } from './schedule';
-import type { Lesson, LocalFile, Note, Period, Profile, RemindMode, Share, Task, Timetable } from './types';
+import type { Book, CalEvent, Lesson, LocalFile, Note, Period, Profile, RemindMode, Share, Task, Timetable } from './types';
 
 const CACHE_KEY = 'hausi-cache-v1';
 
@@ -19,6 +19,8 @@ type Snapshot = {
 	tasks: Task[];
 	notes: Note[];
 	shares: Share[];
+	books: Book[];
+	events: CalEvent[];
 	syncedAt: string | null;
 };
 
@@ -27,6 +29,16 @@ function own(userId: string) {
 		Permission.read(Role.user(userId)),
 		Permission.update(Role.user(userId)),
 		Permission.delete(Role.user(userId))
+	];
+}
+
+function bookPerms(userId: string, book: Book | null | undefined) {
+	if (!book?.teamId) return own(userId);
+	return [
+		...own(userId),
+		Permission.read(Role.team(book.teamId)),
+		Permission.update(Role.team(book.teamId)),
+		Permission.delete(Role.team(book.teamId))
 	];
 }
 
@@ -43,6 +55,7 @@ function mapTask(row: Record<string, unknown>): Task {
 		$id: asString(row.$id),
 		$createdAt: asString(row.$createdAt),
 		userId: asString(row.userId),
+		bookId: asString(row.bookId),
 		title: asString(row.title),
 		details: asString(row.details),
 		subject: asString(row.subject),
@@ -62,6 +75,7 @@ function mapShare(row: Record<string, unknown>): Share {
 		$id: asString(row.$id),
 		userId: asString(row.userId),
 		taskId: asString(row.taskId),
+		kind: asString(row.kind) === 'note' ? 'note' : 'task',
 		title: asString(row.title),
 		details: asString(row.details),
 		subject: asString(row.subject),
@@ -74,9 +88,34 @@ function mapNote(row: Record<string, unknown>): Note {
 		$id: asString(row.$id),
 		$createdAt: asString(row.$createdAt),
 		userId: asString(row.userId),
+		bookId: asString(row.bookId),
 		title: asString(row.title),
 		body: asString(row.body),
 		subject: asString(row.subject)
+	};
+}
+
+function mapBook(row: Record<string, unknown>): Book {
+	return {
+		$id: asString(row.$id),
+		userId: asString(row.userId),
+		name: asString(row.name),
+		kind: asString(row.kind) === 'shared' ? 'shared' : 'private',
+		teamId: asString(row.teamId),
+		inviteCode: asString(row.inviteCode)
+	};
+}
+
+function mapEvent(row: Record<string, unknown>): CalEvent {
+	return {
+		$id: asString(row.$id),
+		userId: asString(row.userId),
+		bookId: asString(row.bookId),
+		title: asString(row.title),
+		details: asString(row.details),
+		subject: asString(row.subject),
+		startsAt: asString(row.startsAt),
+		kind: asString(row.kind) === 'event' ? 'event' : 'exam'
 	};
 }
 
@@ -109,6 +148,12 @@ function keepPending<T extends { $id: string; pending?: boolean }>(server: T[], 
 	return [...local.filter((item) => item.pending && !ids.has(item.$id)), ...server];
 }
 
+function mergeById<T extends { $id: string }>(...lists: T[][]) {
+	const map = new Map<string, T>();
+	for (const list of lists) for (const item of list) map.set(item.$id, item);
+	return [...map.values()];
+}
+
 function freshExpiry(premium: boolean, from = new Date()) {
 	if (premium) return null;
 	const date = new Date(from);
@@ -125,6 +170,11 @@ function errorCode(error: unknown) {
 	return typeof code === 'number' ? code : 0;
 }
 
+function errorMessage(error: unknown) {
+	const message = (error as { message?: unknown } | null)?.message;
+	return typeof message === 'string' && message.trim() ? message : '';
+}
+
 function isAuthError(error: unknown) {
 	return errorCode(error) === 401;
 }
@@ -132,6 +182,27 @@ function isAuthError(error: unknown) {
 function isNetworkError(error: unknown) {
 	const code = errorCode(error);
 	return !isOnline() || code === 0 || code >= 500;
+}
+
+function inviteCode() {
+	const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+	let value = '';
+	for (let i = 0; i < 8; i++) value += alphabet[Math.floor(Math.random() * alphabet.length)];
+	return value;
+}
+
+function toUploadFile(file: Blob, name = 'anhang') {
+	const fileName = (file instanceof File && file.name) || name;
+	return new File([file], fileName, {
+		type: file.type || 'application/octet-stream',
+		lastModified: file instanceof File ? file.lastModified : Date.now()
+	});
+}
+
+function fileFromLocal(file: LocalFile) {
+	return new File([new Uint8Array(file.buffer)], file.name || 'anhang', {
+		type: file.type || 'application/octet-stream'
+	});
 }
 
 function readCache(): Snapshot | null {
@@ -157,6 +228,8 @@ class HausiStore {
 	tasks = $state<Task[]>([]);
 	notes = $state<Note[]>([]);
 	shares = $state<Share[]>([]);
+	books = $state<Book[]>([]);
+	events = $state<CalEvent[]>([]);
 	queued = $state(0);
 	toasts = $state<Toast[]>([]);
 	captureOpen = $state(false);
@@ -176,6 +249,36 @@ class HausiStore {
 		);
 	}
 
+	get privateBook() {
+		const userId = this.user?.$id;
+		return this.books.find((book) => book.kind === 'private' && book.userId === userId) ?? this.books.find((book) => book.kind === 'private') ?? null;
+	}
+
+	get activeBook() {
+		return this.books.find((book) => book.$id === this.profile?.activeBookId) ?? this.privateBook;
+	}
+
+	get inSharedBook() {
+		return this.activeBook?.kind === 'shared';
+	}
+
+	get bookTasks() {
+		const book = this.activeBook;
+		if (!book) return this.tasks;
+		return this.tasks.filter((task) => task.bookId === book.$id || (!task.bookId && book.kind === 'private'));
+	}
+
+	get bookNotes() {
+		const book = this.activeBook;
+		if (!book) return this.notes;
+		return this.notes.filter((note) => note.bookId === book.$id || (!note.bookId && book.kind === 'private'));
+	}
+
+	get bookEvents() {
+		const id = this.activeBook?.$id;
+		return id ? this.events.filter((item) => item.bookId === id) : this.events;
+	}
+
 	get activeLessons() {
 		const id = this.activeTimetable?.$id;
 		return id ? this.lessons.filter((lesson) => lesson.timetableId === id) : [];
@@ -190,7 +293,7 @@ class HausiStore {
 	}
 
 	get openTasks() {
-		return this.tasks.filter((task) => !task.done && !this.isExpired(task));
+		return this.bookTasks.filter((task) => !task.done && !this.isExpired(task));
 	}
 
 	constructor() {
@@ -245,6 +348,8 @@ class HausiStore {
 			tasks: this.tasks,
 			notes: this.notes,
 			shares: this.shares,
+			books: this.books,
+			events: this.events,
 			syncedAt: this.syncedAt
 		};
 		const text = JSON.stringify(snapshot);
@@ -265,6 +370,8 @@ class HausiStore {
 		this.tasks = snapshot.tasks ?? [];
 		this.notes = snapshot.notes ?? [];
 		this.shares = snapshot.shares ?? [];
+		this.books = snapshot.books ?? [];
+		this.events = snapshot.events ?? [];
 		this.syncedAt = snapshot.syncedAt ?? null;
 	}
 
@@ -276,6 +383,8 @@ class HausiStore {
 		this.tasks = [];
 		this.notes = [];
 		this.shares = [];
+		this.books = [];
+		this.events = [];
 		this.syncedAt = null;
 	}
 
@@ -288,7 +397,9 @@ class HausiStore {
 					Channel.tablesdb(DATABASE_ID).table(TABLES.notes).row(),
 					Channel.tablesdb(DATABASE_ID).table(TABLES.lessons).row(),
 					Channel.tablesdb(DATABASE_ID).table(TABLES.timetables).row(),
-					Channel.tablesdb(DATABASE_ID).table(TABLES.shares).row()
+					Channel.tablesdb(DATABASE_ID).table(TABLES.shares).row(),
+					Channel.tablesdb(DATABASE_ID).table(TABLES.books).row(),
+					Channel.tablesdb(DATABASE_ID).table(TABLES.events).row()
 				],
 				() => {
 					clearTimeout(this.liveTimer);
@@ -364,7 +475,7 @@ class HausiStore {
 		const userId = this.user.$id;
 		this.syncing = true;
 		try {
-			const [profiles, timetables, lessons, tasks, notes, shares] = await Promise.all([
+			const [profiles, timetables, lessons, ownTasks, notesOwn, shares, books] = await Promise.all([
 				tables.listRows({
 					databaseId: DATABASE_ID,
 					tableId: TABLES.profiles,
@@ -394,8 +505,35 @@ class HausiStore {
 					databaseId: DATABASE_ID,
 					tableId: TABLES.shares,
 					queries: [Query.equal('userId', userId), Query.limit(200)]
+				}),
+				tables.listRows({
+					databaseId: DATABASE_ID,
+					tableId: TABLES.books,
+					queries: [Query.limit(50)]
 				})
 			]);
+
+			this.books = (books.rows as Record<string, unknown>[]).map(mapBook);
+			const bookIds = this.books.map((book) => book.$id);
+			const [bookTasks, bookNotes, bookEvents] = bookIds.length
+				? await Promise.all([
+						tables.listRows({
+							databaseId: DATABASE_ID,
+							tableId: TABLES.tasks,
+							queries: [Query.equal('bookId', bookIds), Query.orderDesc('$createdAt'), Query.limit(200)]
+						}),
+						tables.listRows({
+							databaseId: DATABASE_ID,
+							tableId: TABLES.notes,
+							queries: [Query.equal('bookId', bookIds), Query.orderDesc('$createdAt'), Query.limit(200)]
+						}),
+						tables.listRows({
+							databaseId: DATABASE_ID,
+							tableId: TABLES.events,
+							queries: [Query.equal('bookId', bookIds), Query.orderAsc('startsAt'), Query.limit(200)]
+						})
+					])
+				: [{ rows: [] }, { rows: [] }, { rows: [] }];
 
 			const profileRow = profiles.rows[0] as Record<string, unknown> | undefined;
 			if (!profileRow) {
@@ -403,26 +541,42 @@ class HausiStore {
 					databaseId: DATABASE_ID,
 					tableId: TABLES.profiles,
 					rowId: ID.unique(),
-					data: { userId, name: this.user.name, premium: false, activeTimetableId: '' },
+					data: { userId, name: this.user.name, premium: false, activeTimetableId: '', activeBookId: '' },
 					permissions: own(userId)
 				});
-				this.profile = { $id: created.$id, userId, name: this.user.name, premium: false, activeTimetableId: '' };
+				this.profile = {
+					$id: created.$id,
+					userId,
+					name: this.user.name,
+					premium: false,
+					activeTimetableId: '',
+					activeBookId: ''
+				};
 			} else {
 				this.profile = {
 					$id: asString(profileRow.$id),
 					userId,
 					name: asString(profileRow.name) || this.user.name,
 					premium: asBool(profileRow.premium),
-					activeTimetableId: asString(profileRow.activeTimetableId)
+					activeTimetableId: asString(profileRow.activeTimetableId),
+					activeBookId: asString(profileRow.activeBookId)
 				};
 			}
 
 			this.timetables = (timetables.rows as Record<string, unknown>[]).map(mapTimetable);
 			this.lessons = (lessons.rows as Record<string, unknown>[]).map(mapLesson);
-			const serverTasks = (tasks.rows as Record<string, unknown>[]).map(mapTask).filter((task) => !this.isExpired(task));
+			const serverTasks = mergeById(
+				(ownTasks.rows as Record<string, unknown>[]).map(mapTask),
+				(bookTasks.rows as Record<string, unknown>[]).map(mapTask)
+			).filter((task) => !this.isExpired(task));
 			this.tasks = keepPending(serverTasks, this.tasks);
-			this.notes = keepPending((notes.rows as Record<string, unknown>[]).map(mapNote), this.notes);
+			this.notes = keepPending(
+				mergeById((notesOwn.rows as Record<string, unknown>[]).map(mapNote), (bookNotes.rows as Record<string, unknown>[]).map(mapNote)),
+				this.notes
+			);
+			this.events = keepPending((bookEvents.rows as Record<string, unknown>[]).map(mapEvent), this.events);
 			this.shares = (shares.rows as Record<string, unknown>[]).map(mapShare);
+			await this.ensureBooks();
 			this.syncedAt = new Date().toISOString();
 			return true;
 		} catch (error) {
@@ -431,6 +585,36 @@ class HausiStore {
 		} finally {
 			this.syncing = false;
 		}
+	}
+
+	private async ensureBooks() {
+		if (!this.user || !this.profile) return;
+		const userId = this.user.$id;
+		if (!this.privateBook) {
+			const rowId = ID.unique();
+			const book: Book = { $id: rowId, userId, name: 'Privates Buch', kind: 'private', teamId: '', inviteCode: '' };
+			await tables.createRow({
+				databaseId: DATABASE_ID,
+				tableId: TABLES.books,
+				rowId,
+				data: { userId, name: book.name, kind: 'private', teamId: '', inviteCode: '' },
+				permissions: own(userId)
+			});
+			this.books = [book, ...this.books];
+		}
+		const privateId = this.privateBook?.$id;
+		if (privateId) {
+			for (const task of this.tasks.filter((item) => !item.bookId && item.userId === userId)) {
+				this.patchTask(task.$id, { bookId: privateId });
+				await tables.updateRow({ databaseId: DATABASE_ID, tableId: TABLES.tasks, rowId: task.$id, data: { bookId: privateId } }).catch(() => undefined);
+			}
+			for (const note of this.notes.filter((item) => !item.bookId && item.userId === userId)) {
+				this.patchNote(note.$id, { bookId: privateId });
+				await tables.updateRow({ databaseId: DATABASE_ID, tableId: TABLES.notes, rowId: note.$id, data: { bookId: privateId } }).catch(() => undefined);
+			}
+		}
+		const active = this.books.find((book) => book.$id === this.profile?.activeBookId);
+		if (!active && this.privateBook) await this.setActiveBook(this.privateBook.$id);
 	}
 
 	async register(name: string, email: string, password: string) {
@@ -497,8 +681,8 @@ class HausiStore {
 	private async attempt(work: () => Promise<unknown>) {
 		try {
 			await work();
-		} catch {
-			this.ping('Das hat nicht geklappt. Bitte nochmal versuchen.', 'warn');
+		} catch (error) {
+			this.ping(errorMessage(error) || 'Das hat nicht geklappt. Bitte nochmal versuchen.', 'warn');
 			void this.refresh();
 		}
 	}
@@ -524,7 +708,6 @@ class HausiStore {
 		await this.attempt(async () => {
 			await this.send({ kind: 'update', table: TABLES.profiles, rowId: profileId, data: { premium } });
 			for (const task of this.tasks) {
-				if (task.$id.startsWith('local:')) continue;
 				const expiresAt = premium ? null : freshExpiry(false, new Date(task.$createdAt || Date.now()));
 				this.patchTask(task.$id, { expiresAt });
 				await this.send({ kind: 'update', table: TABLES.tasks, rowId: task.$id, data: { expiresAt } });
@@ -538,6 +721,101 @@ class HausiStore {
 		const profileId = this.profile.$id;
 		this.profile = { ...this.profile, activeTimetableId: id };
 		await this.send({ kind: 'update', table: TABLES.profiles, rowId: profileId, data: { activeTimetableId: id } });
+	}
+
+	async setActiveBook(id: string) {
+		if (!this.profile) return;
+		const profileId = this.profile.$id;
+		this.profile = { ...this.profile, activeBookId: id };
+		await this.send({ kind: 'update', table: TABLES.profiles, rowId: profileId, data: { activeBookId: id } });
+	}
+
+	async createSharedBook(name: string) {
+		if (!this.user || this.needsInternet()) return;
+		const userId = this.user.$id;
+		const teamId = ID.unique();
+		const rowId = ID.unique();
+		const code = inviteCode();
+		const label = name.trim() || 'Geteiltes Buch';
+		await teams.create({ teamId, name: label, roles: ['owner'] });
+		const book: Book = { $id: rowId, userId, name: label, kind: 'shared', teamId, inviteCode: code };
+		await tables.createRow({
+			databaseId: DATABASE_ID,
+			tableId: TABLES.books,
+			rowId,
+			data: { userId, name: label, kind: 'shared', teamId, inviteCode: code },
+			permissions: [
+				Permission.read(Role.team(teamId)),
+				Permission.update(Role.team(teamId)),
+				Permission.delete(Role.user(userId))
+			]
+		});
+		this.books = [...this.books, book];
+		await this.setActiveBook(rowId);
+		this.ping('Geteiltes Buch erstellt.');
+		return book;
+	}
+
+	async renameBook(id: string, name: string) {
+		this.books = this.books.map((book) => (book.$id === id ? { ...book, name } : book));
+		await this.attempt(() => this.send({ kind: 'update', table: TABLES.books, rowId: id, data: { name } }));
+	}
+
+	async joinBook(code: string) {
+		if (!this.user || this.needsInternet()) return '';
+		const execution = await functions.createExecution({
+			functionId: JOIN_BOOK_FN,
+			body: JSON.stringify({ code: code.trim() })
+		});
+		let payload: { bookId?: string; name?: string; message?: string } = {};
+		try {
+			payload = JSON.parse(execution.responseBody || '{}') as typeof payload;
+		} catch {
+			payload = {};
+		}
+		if (execution.responseStatusCode >= 400) {
+			throw new Error(payload.message || 'Beitreten hat nicht geklappt.');
+		}
+		await this.refresh();
+		if (payload.bookId) await this.setActiveBook(payload.bookId);
+		this.ping(payload.name ? `Du bist in „${payload.name}“.` : 'Buch beigetreten.');
+		return payload.bookId ?? '';
+	}
+
+	async leaveBook(book: Book) {
+		if (!this.user || book.kind !== 'shared' || this.needsInternet()) return;
+		if (book.userId === this.user.$id) {
+			this.ping('Als Besitzer kannst du das Buch nur löschen.', 'warn');
+			return;
+		}
+		const members = await teams.listMemberships({ teamId: book.teamId, queries: [Query.equal('userId', this.user.$id), Query.limit(5)] });
+		for (const member of members.memberships) {
+			await teams.deleteMembership({ teamId: book.teamId, membershipId: member.$id });
+		}
+		this.books = this.books.filter((item) => item.$id !== book.$id);
+		if (this.privateBook) await this.setActiveBook(this.privateBook.$id);
+		this.ping('Du hast das Buch verlassen.');
+	}
+
+	async deleteBook(book: Book) {
+		if (!this.user || book.kind !== 'shared' || book.userId !== this.user.$id || this.needsInternet()) return;
+		await tables.deleteRow({ databaseId: DATABASE_ID, tableId: TABLES.books, rowId: book.$id });
+		try {
+			await teams.delete({ teamId: book.teamId });
+		} catch {
+			/* Team kann schon weg sein */
+		}
+		this.books = this.books.filter((item) => item.$id !== book.$id);
+		if (this.privateBook) await this.setActiveBook(this.privateBook.$id);
+		this.ping('Buch gelöscht.');
+	}
+
+	bookLink(book: Book) {
+		const origin =
+			typeof location === 'undefined' || location.hostname === '127.0.0.1' || location.hostname === 'localhost'
+				? 'https://hausi.appwrite.network'
+				: location.origin;
+		return `${origin}/buch/${book.inviteCode}`;
 	}
 
 	async createTimetable(name: string) {
@@ -570,34 +848,23 @@ class HausiStore {
 	}
 
 	async activateTimetable(id: string) {
-		if (!this.profile) return;
-		const changed = this.timetables.filter((item) => item.active !== (item.$id === id));
 		this.timetables = this.timetables.map((item) => ({ ...item, active: item.$id === id }));
 		await this.attempt(async () => {
-			for (const item of changed) {
-				await this.send({
-					kind: 'update',
-					table: TABLES.timetables,
-					rowId: item.$id,
-					data: { active: item.$id === id }
-				});
+			for (const item of this.timetables) {
+				await this.send({ kind: 'update', table: TABLES.timetables, rowId: item.$id, data: { active: item.$id === id } });
 			}
 			await this.setActiveTimetableId(id);
 		});
 	}
 
 	async deleteTimetable(id: string) {
-		const related = this.lessons.filter((lesson) => lesson.timetableId === id);
 		this.lessons = this.lessons.filter((lesson) => lesson.timetableId !== id);
 		this.timetables = this.timetables.filter((item) => item.$id !== id);
-		await this.attempt(async () => {
-			for (const lesson of related) {
-				await this.send({ kind: 'delete', table: TABLES.lessons, rowId: lesson.$id });
-			}
-			await this.send({ kind: 'delete', table: TABLES.timetables, rowId: id });
-		});
 		const next = this.timetables[0];
-		if (next) await this.activateTimetable(next.$id);
+		await this.attempt(async () => {
+			await this.send({ kind: 'delete', table: TABLES.timetables, rowId: id });
+			if (next) await this.activateTimetable(next.$id);
+		});
 	}
 
 	async addLesson(input: Omit<Lesson, '$id' | 'userId'>) {
@@ -625,10 +892,12 @@ class HausiStore {
 		files: File[];
 	}) {
 		if (!this.user || !this.profile) return;
+		const book = this.activeBook;
 		const rowId = ID.unique();
 		const expiresAt = freshExpiry(this.profile.premium);
 		const payload: Record<string, unknown> = {
 			userId: this.user.$id,
+			bookId: book?.$id ?? '',
 			title: input.title,
 			details: input.details,
 			subject: input.subject,
@@ -645,6 +914,7 @@ class HausiStore {
 				$id: rowId,
 				$createdAt: new Date().toISOString(),
 				userId: this.user.$id,
+				bookId: book?.$id ?? '',
 				title: input.title,
 				details: input.details,
 				subject: input.subject,
@@ -663,7 +933,13 @@ class HausiStore {
 
 		try {
 			const files = await filesFrom(input.files);
-			const sent = await this.send({ kind: 'task', rowId, payload, files });
+			const sent = await this.send({
+				kind: 'task',
+				rowId,
+				payload,
+				files,
+				permissions: bookPerms(this.user.$id, book)
+			});
 			if (sent) {
 				this.patchTask(rowId, { pending: false });
 				if (files.length) void this.refresh();
@@ -671,29 +947,71 @@ class HausiStore {
 			} else {
 				this.ping('Offline gespeichert. Wird später synchronisiert.', 'warn');
 			}
-		} catch {
+		} catch (error) {
 			this.tasks = this.tasks.filter((task) => task.$id !== rowId);
-			this.ping('Die Aufgabe konnte nicht gespeichert werden.', 'warn');
+			this.ping(errorMessage(error) || 'Die Aufgabe konnte nicht gespeichert werden.', 'warn');
 		}
 	}
 
 	async createNote(input: { title: string; body: string; subject: string }) {
 		if (!this.user) return;
+		const book = this.activeBook;
 		const rowId = ID.unique();
-		const data = { userId: this.user.$id, title: input.title, body: input.body, subject: input.subject };
+		const data = { userId: this.user.$id, bookId: book?.$id ?? '', title: input.title, body: input.body, subject: input.subject };
 		this.notes = [{ $id: rowId, $createdAt: new Date().toISOString(), ...data, pending: true }, ...this.notes];
 		try {
-			const sent = await this.send({ kind: 'create', table: TABLES.notes, rowId, data });
+			const sent = await this.send({
+				kind: 'create',
+				table: TABLES.notes,
+				rowId,
+				data,
+				permissions: bookPerms(this.user.$id, book)
+			});
 			if (sent) {
 				this.patchNote(rowId, { pending: false });
 				this.ping('Notiz gespeichert.');
 			} else {
 				this.ping('Offline gespeichert. Wird später synchronisiert.', 'warn');
 			}
-		} catch {
+		} catch (error) {
 			this.notes = this.notes.filter((note) => note.$id !== rowId);
-			this.ping('Die Notiz konnte nicht gespeichert werden.', 'warn');
+			this.ping(errorMessage(error) || 'Die Notiz konnte nicht gespeichert werden.', 'warn');
 		}
+	}
+
+	async createEvent(input: { title: string; details: string; subject: string; startsAt: string; kind: 'exam' | 'event' }) {
+		if (!this.user) return;
+		const book = this.activeBook;
+		if (!book) {
+			this.ping('Kein Buch ausgewählt.', 'warn');
+			return;
+		}
+		const rowId = ID.unique();
+		const data = { userId: this.user.$id, bookId: book.$id, ...input };
+		this.events = [...this.events, { $id: rowId, ...data, pending: true }].sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+		try {
+			const sent = await this.send({
+				kind: 'create',
+				table: TABLES.events,
+				rowId,
+				data,
+				permissions: bookPerms(this.user.$id, book)
+			});
+			if (sent) {
+				this.events = this.events.map((item) => (item.$id === rowId ? { ...item, pending: false } : item));
+				this.ping('Termin gespeichert.');
+			} else {
+				this.ping('Offline gespeichert. Wird später synchronisiert.', 'warn');
+			}
+		} catch (error) {
+			this.events = this.events.filter((item) => item.$id !== rowId);
+			this.ping(errorMessage(error) || 'Der Termin konnte nicht gespeichert werden.', 'warn');
+		}
+	}
+
+	async deleteEvent(id: string) {
+		this.events = this.events.filter((item) => item.$id !== id);
+		await this.attempt(() => this.send({ kind: 'delete', table: TABLES.events, rowId: id }));
 	}
 
 	async toggleTask(task: Task) {
@@ -730,18 +1048,31 @@ class HausiStore {
 
 	async deleteNote(note: Note) {
 		this.notes = this.notes.filter((item) => item.$id !== note.$id);
+		this.shares = this.shares.filter((share) => !(share.kind === 'note' && share.taskId === note.$id));
 		if (note.$id.startsWith('local:')) return;
-		await this.attempt(() => this.send({ kind: 'delete', table: TABLES.notes, rowId: note.$id }));
+		await this.attempt(async () => {
+			const share = this.shareOf(note.$id, 'note');
+			if (share) await this.send({ kind: 'delete', table: TABLES.shares, rowId: share.$id });
+			await this.send({ kind: 'delete', table: TABLES.notes, rowId: note.$id });
+		});
 	}
 
 	async updateNote(id: string, data: Partial<Pick<Note, 'title' | 'body' | 'subject'>>) {
 		this.patchNote(id, data);
 		if (id.startsWith('local:')) return;
-		await this.attempt(() => this.send({ kind: 'update', table: TABLES.notes, rowId: id, data }));
+		await this.attempt(async () => {
+			await this.send({ kind: 'update', table: TABLES.notes, rowId: id, data });
+			const share = this.shareOf(id, 'note');
+			if (!share) return;
+			const note = this.notes.find((item) => item.$id === id);
+			const next = { title: note?.title ?? share.title, details: note?.body ?? share.details, subject: note?.subject ?? share.subject };
+			this.shares = this.shares.map((item) => (item.$id === share.$id ? { ...item, ...next } : item));
+			await this.send({ kind: 'update', table: TABLES.shares, rowId: share.$id, data: next });
+		});
 	}
 
-	shareOf(taskId: string) {
-		return this.shares.find((share) => share.taskId === taskId) ?? null;
+	shareOf(itemId: string, kind: 'task' | 'note' = 'task') {
+		return this.shares.find((share) => share.taskId === itemId && share.kind === kind) ?? null;
 	}
 
 	shareLink(shareId: string) {
@@ -752,37 +1083,57 @@ class HausiStore {
 		return `${origin}/teilen/${shareId}`;
 	}
 
-	async shareTask(task: Task) {
-		if (!this.user || task.pending || this.needsInternet()) return '';
-		const data = { title: task.title, details: task.details, subject: task.subject, fileIds: task.fileIds };
-		const existing = this.shareOf(task.$id);
+	private async upsertShare(itemId: string, kind: 'task' | 'note', data: { title: string; details: string; subject: string; fileIds: string[] }) {
+		if (!this.user || this.needsInternet()) return '';
+		const existing = this.shareOf(itemId, kind);
+		const payload = { ...data, kind };
 		if (existing) {
-			await tables.updateRow({ databaseId: DATABASE_ID, tableId: TABLES.shares, rowId: existing.$id, data });
-			await this.publishFiles(task.fileIds, true);
-			this.shares = this.shares.map((share) => (share.$id === existing.$id ? { ...share, ...data } : share));
+			await tables.updateRow({ databaseId: DATABASE_ID, tableId: TABLES.shares, rowId: existing.$id, data: payload });
+			await this.publishFiles(data.fileIds, true);
+			this.shares = this.shares.map((share) => (share.$id === existing.$id ? { ...share, ...payload } : share));
 			return this.shareLink(existing.$id);
 		}
 		const created = await tables.createRow({
 			databaseId: DATABASE_ID,
 			tableId: TABLES.shares,
 			rowId: ID.unique(),
-			data: { ...data, userId: this.user.$id, taskId: task.$id },
+			data: { ...payload, userId: this.user.$id, taskId: itemId },
 			permissions: [
 				Permission.read(Role.any()),
 				Permission.update(Role.user(this.user.$id)),
 				Permission.delete(Role.user(this.user.$id))
 			]
 		});
-		await this.publishFiles(task.fileIds, true);
+		await this.publishFiles(data.fileIds, true);
 		this.shares = [...this.shares, mapShare(created as unknown as Record<string, unknown>)];
 		return this.shareLink(created.$id);
 	}
 
-	async revokeShare(task: Task) {
-		const existing = this.shareOf(task.$id);
+	async shareTask(task: Task) {
+		if (task.pending) return '';
+		return this.upsertShare(task.$id, 'task', {
+			title: task.title,
+			details: task.details,
+			subject: task.subject,
+			fileIds: task.fileIds
+		});
+	}
+
+	async shareNote(note: Note) {
+		if (note.pending) return '';
+		return this.upsertShare(note.$id, 'note', {
+			title: note.title,
+			details: note.body,
+			subject: note.subject,
+			fileIds: []
+		});
+	}
+
+	async revokeShare(itemId: string, kind: 'task' | 'note' = 'task', fileIds: string[] = []) {
+		const existing = this.shareOf(itemId, kind);
 		if (!existing || this.needsInternet()) return;
 		await tables.deleteRow({ databaseId: DATABASE_ID, tableId: TABLES.shares, rowId: existing.$id });
-		await this.publishFiles(task.fileIds, false);
+		await this.publishFiles(fileIds, false);
 		this.shares = this.shares.filter((share) => share.$id !== existing.$id);
 	}
 
@@ -796,6 +1147,10 @@ class HausiStore {
 	}
 
 	async adoptShare(share: Share) {
+		if (share.kind === 'note') {
+			await this.createNote({ title: share.title, body: share.details, subject: share.subject });
+			return;
+		}
 		await this.createTask({
 			title: share.title,
 			details: share.details,
@@ -809,22 +1164,27 @@ class HausiStore {
 
 	async attachFiles(task: Task, files: File[]) {
 		if (!this.user || files.length === 0 || this.needsInternet()) return;
-		const ids = [...task.fileIds];
-		for (const file of files) {
-			const created = await storage.createFile({
-				bucketId: BUCKET_ID,
-				fileId: ID.unique(),
-				file,
-				permissions: own(this.user.$id)
-			});
-			ids.push(created.$id);
-		}
-		await tables.updateRow({ databaseId: DATABASE_ID, tableId: TABLES.tasks, rowId: task.$id, data: { fileIds: ids } });
-		this.patchTask(task.$id, { fileIds: ids });
-		const share = this.shareOf(task.$id);
-		if (share) {
-			await tables.updateRow({ databaseId: DATABASE_ID, tableId: TABLES.shares, rowId: share.$id, data: { fileIds: ids } });
-			await this.publishFiles(ids, true);
+		try {
+			const ids = [...task.fileIds];
+			for (const file of files) {
+				const created = await storage.createFile({
+					bucketId: BUCKET_ID,
+					fileId: ID.unique(),
+					file: toUploadFile(file),
+					permissions: bookPerms(this.user.$id, this.books.find((book) => book.$id === task.bookId) ?? this.activeBook)
+				});
+				ids.push(created.$id);
+			}
+			await tables.updateRow({ databaseId: DATABASE_ID, tableId: TABLES.tasks, rowId: task.$id, data: { fileIds: ids } });
+			this.patchTask(task.$id, { fileIds: ids });
+			const share = this.shareOf(task.$id);
+			if (share) {
+				await tables.updateRow({ databaseId: DATABASE_ID, tableId: TABLES.shares, rowId: share.$id, data: { fileIds: ids } });
+				await this.publishFiles(ids, true);
+			}
+			this.ping(files.length === 1 ? 'Datei gespeichert.' : `${files.length} Dateien gespeichert.`);
+		} catch (error) {
+			this.ping(errorMessage(error) || 'Die Datei konnte nicht gespeichert werden.', 'warn');
 		}
 	}
 
@@ -872,6 +1232,7 @@ class HausiStore {
 		if (sent) {
 			this.tasks = this.tasks.map((task) => (task.pending ? { ...task, pending: false } : task));
 			this.notes = this.notes.map((note) => (note.pending ? { ...note, pending: false } : note));
+			this.events = this.events.map((item) => (item.pending ? { ...item, pending: false } : item));
 			this.ping(sent === 1 ? '1 Änderung synchronisiert.' : `${sent} Änderungen synchronisiert.`);
 		}
 		return sent;
@@ -885,6 +1246,8 @@ class HausiStore {
 		this.notes = this.notes.filter((item) => item.$id !== rowId);
 		this.lessons = this.lessons.filter((item) => item.$id !== rowId);
 		this.timetables = this.timetables.filter((item) => item.$id !== rowId);
+		this.events = this.events.filter((item) => item.$id !== rowId);
+		this.books = this.books.filter((item) => item.$id !== rowId);
 	}
 
 	private async runOp(op: QueueOp) {
@@ -892,7 +1255,7 @@ class HausiStore {
 		const userId = this.user.$id;
 		switch (op.kind) {
 			case 'task':
-				await this.pushTask(op.payload, op.files, op.rowId);
+				await this.pushTask(op.payload, op.files, op.rowId, op.permissions);
 				break;
 			case 'create':
 				await tables.createRow({
@@ -900,7 +1263,7 @@ class HausiStore {
 					tableId: op.table,
 					rowId: op.rowId,
 					data: op.data,
-					permissions: own(userId)
+					permissions: op.permissions ?? own(userId)
 				});
 				break;
 			case 'update':
@@ -930,15 +1293,15 @@ class HausiStore {
 		}
 	}
 
-	private async pushTask(payload: Record<string, unknown>, files: LocalFile[], rowId = ID.unique()) {
+	private async pushTask(payload: Record<string, unknown>, files: LocalFile[], rowId = ID.unique(), permissions?: string[]) {
 		if (!this.user) return;
 		const fileIds: string[] = [];
 		for (const file of files) {
 			const created = await storage.createFile({
 				bucketId: BUCKET_ID,
 				fileId: ID.unique(),
-				file: new File([file.buffer], file.name, { type: file.type || 'application/octet-stream' }),
-				permissions: own(this.user.$id)
+				file: fileFromLocal(file),
+				permissions: permissions ?? own(this.user.$id)
 			});
 			fileIds.push(created.$id);
 		}
@@ -950,8 +1313,9 @@ class HausiStore {
 			tableId: TABLES.tasks,
 			rowId,
 			data,
-			permissions: own(this.user.$id)
+			permissions: permissions ?? own(this.user.$id)
 		});
+		this.patchTask(rowId, { fileIds, pending: false });
 	}
 
 	private async publishFiles(fileIds: string[], shared: boolean) {

@@ -74,9 +74,15 @@
 		</div>
 	</section>
 
+	<section class="card rise grid gap-1 p-2 sm:grid-cols-3 lg:col-span-2">
+		<a href="/app/buecher" class="hover:bg-accent rounded-xl px-3 py-3 text-sm font-medium">Bücher</a>
+		<a href="/app/kalender" class="hover:bg-accent rounded-xl px-3 py-3 text-sm font-medium">Kalender</a>
+		<a href="/app/stundenplan" class="hover:bg-accent rounded-xl px-3 py-3 text-sm font-medium">Stundenplan</a>
+	</section>
+
 	<section class="card rise p-5">
 		<h3 class="text-sm font-semibold">Darstellung</h3>
-		<p class="text-muted-foreground mt-0.5 text-sm">Schwarz auf Weiß oder Weiß auf Schwarz.</p>
+		<p class="text-muted-foreground mt-0.5 text-sm">Hell in Grau, dunkel in Grau – ohne hartes Schwarz oder Weiß.</p>
 		<div class="mt-4 grid grid-cols-2 gap-2">
 			{#each [{ mode: 'light', label: 'Hell', icon: Sun }, { mode: 'dark', label: 'Dunkel', icon: Moon }] as option}
 				{@const Icon = option.icon}

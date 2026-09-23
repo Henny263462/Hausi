@@ -9,8 +9,12 @@ export const TABLES = {
 	lessons: 'lessons',
 	tasks: 'tasks',
 	notes: 'notes',
-	shares: 'shares'
+	shares: 'shares',
+	books: 'books',
+	events: 'events'
 } as const;
+
+export const JOIN_BOOK_FN = 'join-book';
 
 /** Aufgaben ohne Premium bleiben zwei Monate. */
 export const FREE_RETENTION_DAYS = 60;
