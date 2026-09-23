@@ -44,7 +44,8 @@
 		"publish": {
 			"provider": "github",
 			"owner": "Henny263462",
-			"repo": "Hausi"
+			"repo": "Hausi",
+			"releaseType": "release"
 		}
 	}
 }
