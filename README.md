@@ -1,6 +1,6 @@
 # Hausi
 
-Hausaufgaben mit Stundenplan. Die Web-App liegt in `web` (SvelteKit), die Windows-App in `desktop` (Electron). Daten liegen im Appwrite-Projekt Hauso.
+Hausaufgaben mit Stundenplan. Für das kleine einfache tracken. Fully Vibecoded and not maintained.
 
 ## Starten
 
@@ -20,6 +20,4 @@ npm run desktop
 
 `Strg+Alt+H` öffnet die Erfassung ohne Fensterrand.
 
-## Erinnerungen
 
-Die Function `reminders` schickt fällige Aufgaben per E-Mail und löscht abgelaufene Aufgaben. Dafür braucht das Projekt unter Messaging einen aktiven E-Mail-Provider.
