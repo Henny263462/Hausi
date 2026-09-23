@@ -3,12 +3,19 @@ import type { LocalFile } from './types';
 const DB_NAME = 'hausi-queue';
 const STORE = 'ops';
 
-export type QueueOp =
-	| { id: string; kind: 'task'; payload: Record<string, unknown>; files: LocalFile[] }
-	| { id: string; kind: 'note'; payload: Record<string, unknown> }
-	| { id: string; kind: 'patch-task'; taskId: string; data: Record<string, unknown> }
-	| { id: string; kind: 'delete-task'; taskId: string }
-	| { id: string; kind: 'delete-note'; noteId: string };
+type Base = { id: string; at?: number };
+
+export type QueueOp = Base &
+	(
+		| { kind: 'task'; rowId?: string; payload: Record<string, unknown>; files: LocalFile[] }
+		| { kind: 'create'; table: string; rowId: string; data: Record<string, unknown>; shared?: boolean }
+		| { kind: 'update'; table: string; rowId: string; data: Record<string, unknown> }
+		| { kind: 'delete'; table: string; rowId: string }
+		| { kind: 'note'; payload: Record<string, unknown> }
+		| { kind: 'patch-task'; taskId: string; data: Record<string, unknown> }
+		| { kind: 'delete-task'; taskId: string; fileIds?: string[] }
+		| { kind: 'delete-note'; noteId: string }
+	);
 
 function openDb() {
 	return new Promise<IDBDatabase>((resolve, reject) => {
@@ -21,41 +28,43 @@ function openDb() {
 	});
 }
 
-export async function enqueue(op: QueueOp) {
+async function run<T>(mode: IDBTransactionMode, work: (store: IDBObjectStore) => IDBRequest<T> | void) {
 	const db = await openDb();
-	await new Promise<void>((resolve, reject) => {
-		const tx = db.transaction(STORE, 'readwrite');
-		tx.objectStore(STORE).put(op);
-		tx.oncomplete = () => resolve();
-		tx.onerror = () => reject(tx.error);
+	try {
+		return await new Promise<T | undefined>((resolve, reject) => {
+			const tx = db.transaction(STORE, mode);
+			const request = work(tx.objectStore(STORE));
+			tx.oncomplete = () => resolve(request ? request.result : undefined);
+			tx.onerror = () => reject(tx.error);
+		});
+	} finally {
+		db.close();
+	}
+}
+
+export async function enqueue(op: QueueOp) {
+	await run('readwrite', (store) => {
+		store.put({ ...op, at: op.at ?? Date.now() });
 	});
-	db.close();
 }
 
 export async function listQueue(): Promise<QueueOp[]> {
-	const db = await openDb();
-	const ops = await new Promise<QueueOp[]>((resolve, reject) => {
-		const tx = db.transaction(STORE, 'readonly');
-		const request = tx.objectStore(STORE).getAll();
-		request.onsuccess = () => resolve(request.result as QueueOp[]);
-		request.onerror = () => reject(request.error);
-	});
-	db.close();
-	return ops;
+	const ops = ((await run('readonly', (store) => store.getAll())) ?? []) as QueueOp[];
+	return ops.sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
 }
 
 export async function removeQueued(id: string) {
-	const db = await openDb();
-	await new Promise<void>((resolve, reject) => {
-		const tx = db.transaction(STORE, 'readwrite');
-		tx.objectStore(STORE).delete(id);
-		tx.oncomplete = () => resolve();
-		tx.onerror = () => reject(tx.error);
+	await run('readwrite', (store) => {
+		store.delete(id);
 	});
-	db.close();
+}
+
+export async function clearQueue() {
+	await run('readwrite', (store) => {
+		store.clear();
+	});
 }
 
 export async function queueCount() {
-	const ops = await listQueue();
-	return ops.length;
+	return ((await run('readonly', (store) => store.count())) ?? 0) as number;
 }

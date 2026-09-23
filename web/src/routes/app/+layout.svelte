@@ -11,7 +11,9 @@
 </script>
 
 {#if !hausi.ready}
-	<p class="text-muted-foreground grid min-h-screen place-items-center text-sm">Hausi</p>
+	<div class="grid min-h-screen place-items-center">
+		<span class="bg-primary text-primary-foreground grid size-10 animate-pulse place-items-center rounded-xl font-bold">H</span>
+	</div>
 {:else if hausi.user}
 	<Shell>{@render children()}</Shell>
 {/if}

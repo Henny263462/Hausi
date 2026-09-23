@@ -1,8 +1,8 @@
 <script lang="ts">
+	import Download from '@lucide/svelte/icons/download';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { Button } from '$lib/components/ui/button';
 	import { hausi } from '$lib/store.svelte';
 	import type { Share } from '$lib/types';
 
@@ -41,21 +41,50 @@
 	}
 </script>
 
-<div class="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5">
-	<p class="text-xs font-semibold tracking-widest uppercase">Hausi</p>
-	{#if !share && !missing}
-		<p class="text-muted-foreground mt-4 text-sm">Laden…</p>
-	{:else if missing || !share}
-		<h1 class="mt-2 text-xl font-semibold">Link ungültig.</h1>
-	{:else}
-		<p class="text-muted-foreground mt-6 text-xs">{share.subject || 'Ohne Fach'}</p>
-		<h1 class="mt-1 text-2xl font-semibold tracking-tight">{share.title}</h1>
-		{#if share.details}
-			<p class="mt-3 text-sm whitespace-pre-wrap">{share.details}</p>
+<div class="flex min-h-screen flex-col items-center justify-center px-5 py-12">
+	<a href="/" class="mb-8 flex items-center gap-2.5">
+		<span class="bg-primary text-primary-foreground grid size-9 place-items-center rounded-xl text-base font-bold">H</span>
+		<span class="text-lg font-semibold tracking-tight">Hausi</span>
+	</a>
+	<div class="card rise w-full max-w-md p-6">
+		{#if !share && !missing}
+			<div class="space-y-3">
+				<div class="bg-muted h-4 w-20 animate-pulse rounded"></div>
+				<div class="bg-muted h-7 w-3/4 animate-pulse rounded"></div>
+				<div class="bg-muted h-16 animate-pulse rounded"></div>
+			</div>
+		{:else if missing || !share}
+			<h1 class="text-lg font-semibold">Dieser Link ist nicht mehr gültig.</h1>
+			<p class="text-muted-foreground mt-1 text-sm">Die Aufgabe wurde gelöscht oder nicht mehr geteilt.</p>
+		{:else}
+			<p class="eyebrow">Geteilte Aufgabe</p>
+			<div class="mt-3 flex items-center gap-2">
+				<span class="chip">{share.subject || 'Ohne Fach'}</span>
+			</div>
+			<h1 class="mt-3 text-2xl font-semibold tracking-[-0.02em]">{share.title}</h1>
+			{#if share.details}
+				<p class="text-muted-foreground mt-3 text-[15px] leading-7 whitespace-pre-wrap">{share.details}</p>
+			{/if}
+			{#if share.fileIds.length}
+				<div class="mt-4 space-y-1.5">
+					{#each share.fileIds as fileId, index}
+						<a
+							href={hausi.fileUrl(fileId)}
+							target="_blank"
+							rel="noreferrer"
+							class="hover:bg-accent flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+						>
+							<Download class="size-4" /> Anhang {index + 1}
+						</a>
+					{/each}
+				</div>
+			{/if}
+			<div class="mt-6 flex gap-2">
+				<button type="button" class="btn btn-primary flex-1" onclick={take} disabled={taking}>
+					{taking ? 'Wird übernommen …' : 'In meine Aufgaben'}
+				</button>
+				<a class="btn btn-outline" href="/app">Hausi öffnen</a>
+			</div>
 		{/if}
-		<div class="mt-6 flex gap-2">
-			<Button onclick={take} disabled={taking}>{taking ? '…' : 'Übernehmen'}</Button>
-			<Button variant="ghost" href="/app">Öffnen</Button>
-		</div>
-	{/if}
+	</div>
 </div>

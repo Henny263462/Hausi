@@ -17,13 +17,17 @@
 	});
 </script>
 
-<div class="flex min-h-screen items-start justify-center p-3 pt-4">
+<div class="flex min-h-screen items-start justify-center p-4 pt-5">
 	{#if !hausi.ready}
-		<p class="text-sm">…</p>
-	{:else if !hausi.user}
-		<p class="text-sm">Erst im Hauptfenster anmelden. <button type="button" class="underline" onclick={close}>Schließen</button></p>
-	{:else if !hausi.hasSchedule}
-		<p class="text-sm">Stundenplan fehlt. <button type="button" class="underline" onclick={close}>Schließen</button></p>
+		<div class="bg-popover shadow-float h-40 w-full max-w-lg animate-pulse rounded-2xl border"></div>
+	{:else if !hausi.user || !hausi.hasSchedule}
+		<div class="bg-popover shadow-float drag w-full max-w-lg rounded-2xl border p-5">
+			<p class="text-sm font-medium">{!hausi.user ? 'Bitte zuerst im Hauptfenster anmelden.' : 'Es fehlt noch ein Stundenplan.'}</p>
+			<p class="text-muted-foreground mt-1 text-sm">
+				{!hausi.user ? 'Danach funktioniert die Schnellerfassung auch offline.' : 'Leg ihn im Hauptfenster unter „Stundenplan“ an.'}
+			</p>
+			<button type="button" class="no-drag btn btn-outline btn-sm mt-4" onclick={close}>Schließen</button>
+		</div>
 	{:else}
 		<CaptureFlow desktop onDone={close} />
 	{/if}

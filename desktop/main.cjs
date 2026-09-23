@@ -162,6 +162,13 @@ ipcMain.handle('set-hotkey', (_event, value) => {
 	return used;
 });
 
+if (!app.requestSingleInstanceLock()) {
+	app.quit();
+	return;
+}
+
+app.on('second-instance', showMain);
+
 app.whenReady().then(async () => {
 	Menu.setApplicationMenu(null);
 	if (!DEV) {
@@ -177,7 +184,8 @@ app.whenReady().then(async () => {
 	if (app.isPackaged) {
 		try {
 			const { autoUpdater } = require('electron-updater');
-			autoUpdater.checkForUpdatesAndNotify();
+			autoUpdater.on('error', () => undefined);
+			autoUpdater.checkForUpdatesAndNotify().catch(() => undefined);
 		} catch {
 			/* Dev ohne Packer */
 		}

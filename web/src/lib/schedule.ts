@@ -115,3 +115,42 @@ export function daysLeft(iso: string | null | undefined) {
 	const ms = new Date(iso).getTime() - Date.now();
 	return Math.max(0, Math.ceil(ms / 86_400_000));
 }
+
+function dayDiff(date: Date, from = new Date()) {
+	const a = new Date(date);
+	const b = new Date(from);
+	a.setHours(0, 0, 0, 0);
+	b.setHours(0, 0, 0, 0);
+	return Math.round((a.getTime() - b.getTime()) / 86_400_000);
+}
+
+export function formatDue(iso: string | null) {
+	if (!iso) return '';
+	const date = new Date(iso);
+	const time = formatMin(date.getHours() * 60 + date.getMinutes());
+	const diff = dayDiff(date);
+	if (diff === 0) return `Heute ${time}`;
+	if (diff === 1) return `Morgen ${time}`;
+	if (diff === -1) return `Gestern ${time}`;
+	if (diff > 1 && diff < 7) return `${new Intl.DateTimeFormat('de-DE', { weekday: 'short' }).format(date)} ${time}`;
+	return new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'short' }).format(date);
+}
+
+export function isToday(iso: string | null) {
+	return !!iso && dayDiff(new Date(iso)) === 0;
+}
+
+export function isOverdue(iso: string | null) {
+	return !!iso && new Date(iso).getTime() < Date.now();
+}
+
+export function greeting(date = new Date()) {
+	const hour = date.getHours();
+	if (hour < 11) return 'Guten Morgen';
+	if (hour < 17) return 'Hallo';
+	return 'Guten Abend';
+}
+
+export function longDate(date = new Date()) {
+	return new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long' }).format(date);
+}

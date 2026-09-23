@@ -1,9 +1,9 @@
 <script lang="ts">
-	import NotebookPen from '@lucide/svelte/icons/notebook-pen';
+	import ArrowRight from '@lucide/svelte/icons/arrow-right';
+	import Check from '@lucide/svelte/icons/check';
 	import Paperclip from '@lucide/svelte/icons/paperclip';
-	import SquarePen from '@lucide/svelte/icons/square-pen';
 	import X from '@lucide/svelte/icons/x';
-	import { currentLesson, formatMin, formatWhen, jsWeekday, nextLesson, remindNextWeek } from '$lib/schedule';
+	import { currentLesson, formatMin, formatWhen, jsWeekday, nextLesson, remindNextWeek, WEEKDAYS } from '$lib/schedule';
 	import { hausi } from '$lib/store.svelte';
 	import type { RemindMode } from '$lib/types';
 
@@ -25,16 +25,18 @@
 	let card = $state<HTMLElement | null>(null);
 	let fileInput = $state<HTMLInputElement | null>(null);
 
-	const remindOptions: { id: RemindMode; label: string }[] = [
-		{ id: 'next_lesson', label: 'Nächste Stunde' },
-		{ id: 'next_week', label: 'Nächste Woche' },
-		{ id: 'custom', label: 'Datum' }
+	const remindOptions: { id: RemindMode; label: string; hint: string }[] = [
+		{ id: 'next_lesson', label: 'Nächste Stunde', hint: 'Vor der nächsten Stunde im Fach' },
+		{ id: 'next_week', label: 'Nächste Woche', hint: 'Gleiche Zeit in 7 Tagen' },
+		{ id: 'custom', label: 'Datum wählen', hint: 'Eigener Zeitpunkt' }
 	];
 
+	const weekday = jsWeekday();
 	const now = $derived(currentLesson(hausi.activeLessons, new Date(tick)));
-	const todaySubjects = $derived(
-		[...new Set(hausi.activeLessons.filter((lesson) => lesson.weekday === jsWeekday()).map((lesson) => lesson.subject))]
+	const todayLessons = $derived(
+		hausi.activeLessons.filter((lesson) => lesson.weekday === weekday).sort((a, b) => a.startMin - b.startMin)
 	);
+	const todaySubjects = $derived([...new Set(todayLessons.map((lesson) => lesson.subject))]);
 	const allSubjects = $derived(hausi.subjects);
 	const pickCount = $derived(todaySubjects.length + 1);
 	const chosenSubject = $derived.by(() => {
@@ -53,6 +55,21 @@
 		if (mode === 'custom' && custom) return new Date(custom);
 		return null;
 	});
+	const stepIndex = $derived(
+		step === 'title' ? 0 : step === 'details' ? 1 : step === 'remind' || step === 'custom' ? 3 : 2
+	);
+	const stepTotal = $derived(kind === 'task' ? 4 : 3);
+	const tabHint = $derived(
+		step === 'title'
+			? kind === 'task'
+				? 'Notiz'
+				: 'Aufgabe'
+			: step === 'attach'
+				? 'wechseln'
+				: step === 'pick' || step === 'other' || step === 'remind'
+					? 'weiter'
+					: ''
+	);
 
 	$effect(() => {
 		const id = setInterval(() => (tick = Date.now()), 15_000);
@@ -154,6 +171,24 @@
 		onDone?.();
 	}
 
+	function back() {
+		if (step === 'custom') step = 'remind';
+		else if (step === 'remind') step = attach ? (pickIndex >= todaySubjects.length ? 'other' : 'pick') : 'attach';
+		else if (step === 'other') step = todaySubjects.length ? 'pick' : 'attach';
+		else if (step === 'pick') step = 'attach';
+		else if (step === 'attach') step = 'details';
+		else if (step === 'details') step = 'title';
+		else onDone?.();
+	}
+
+	function cycle(delta: number) {
+		if (step === 'attach') attach = !attach;
+		else if (step === 'pick') pickIndex = (pickIndex + delta + pickCount) % pickCount;
+		else if (step === 'other' && allSubjects.length)
+			otherIndex = (otherIndex + delta + allSubjects.length) % allSubjects.length;
+		else if (step === 'remind') remindIndex = (remindIndex + delta + remindOptions.length) % remindOptions.length;
+	}
+
 	function onKeydown(event: KeyboardEvent) {
 		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
 			event.preventDefault();
@@ -162,13 +197,7 @@
 		}
 		if (event.key === 'Escape') {
 			event.preventDefault();
-			if (step === 'custom') step = 'remind';
-			else if (step === 'remind') step = attach ? (pickIndex >= todaySubjects.length ? 'other' : 'pick') : 'attach';
-			else if (step === 'other') step = todaySubjects.length ? 'pick' : 'attach';
-			else if (step === 'pick') step = 'attach';
-			else if (step === 'attach') step = 'details';
-			else if (step === 'details') step = 'title';
-			else onDone?.();
+			back();
 			return;
 		}
 		if (step === 'title' && event.key === 'Tab') {
@@ -176,49 +205,20 @@
 			kind = kind === 'task' ? 'note' : 'task';
 			return;
 		}
-		if (step === 'attach' && event.key === 'Tab') {
+		const listStep = step === 'attach' || step === 'pick' || step === 'other' || step === 'remind';
+		if (listStep && event.key === 'Tab') {
 			event.preventDefault();
-			attach = !attach;
+			cycle(event.shiftKey ? -1 : 1);
 			return;
 		}
-		if (step === 'pick' && event.key === 'Tab') {
+		if (listStep && (event.key === 'ArrowDown' || event.key === 'ArrowRight')) {
 			event.preventDefault();
-			pickIndex = (pickIndex + 1) % pickCount;
+			cycle(1);
 			return;
 		}
-		if (step === 'other' && event.key === 'Tab') {
+		if (listStep && (event.key === 'ArrowUp' || event.key === 'ArrowLeft')) {
 			event.preventDefault();
-			if (allSubjects.length) otherIndex = (otherIndex + 1) % allSubjects.length;
-			return;
-		}
-		if (step === 'pick' && (event.key === 'ArrowDown' || event.key === 'ArrowRight')) {
-			event.preventDefault();
-			pickIndex = (pickIndex + 1) % pickCount;
-			return;
-		}
-		if (step === 'pick' && (event.key === 'ArrowUp' || event.key === 'ArrowLeft')) {
-			event.preventDefault();
-			pickIndex = (pickIndex - 1 + pickCount) % pickCount;
-			return;
-		}
-		if (step === 'other' && (event.key === 'ArrowDown' || event.key === 'ArrowRight')) {
-			event.preventDefault();
-			if (allSubjects.length) otherIndex = (otherIndex + 1) % allSubjects.length;
-			return;
-		}
-		if (step === 'other' && (event.key === 'ArrowUp' || event.key === 'ArrowLeft')) {
-			event.preventDefault();
-			if (allSubjects.length) otherIndex = (otherIndex - 1 + allSubjects.length) % allSubjects.length;
-			return;
-		}
-		if (step === 'remind' && (event.key === 'Tab' || event.key === 'ArrowRight' || event.key === 'ArrowDown')) {
-			event.preventDefault();
-			remindIndex = (remindIndex + 1) % remindOptions.length;
-			return;
-		}
-		if (step === 'remind' && (event.key === 'ArrowLeft' || event.key === 'ArrowUp')) {
-			event.preventDefault();
-			remindIndex = (remindIndex - 1 + remindOptions.length) % remindOptions.length;
+			cycle(-1);
 			return;
 		}
 		if (event.key === 'Enter' && !event.shiftKey) {
@@ -231,165 +231,186 @@
 		if (!list) return;
 		files = [...files, ...Array.from(list)];
 	}
+
+	function lessonTime(subject: string) {
+		const lesson = todayLessons.find((item) => item.subject === subject);
+		return lesson ? formatMin(lesson.startMin) : '';
+	}
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
+{#snippet option(label: string, hint: string, selected: boolean, onclick: () => void, trailing = '')}
+	<button
+		type="button"
+		class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left {selected
+			? 'bg-primary text-primary-foreground'
+			: 'hover:bg-accent'}"
+		{onclick}
+	>
+		<span class="min-w-0 flex-1">
+			<span class="block truncate text-sm font-medium">{label}</span>
+			{#if hint}<span class="block truncate text-xs {selected ? 'opacity-60' : 'text-muted-foreground'}">{hint}</span>{/if}
+		</span>
+		{#if trailing}<span class="tabular shrink-0 text-xs {selected ? 'opacity-70' : 'text-muted-foreground'}">{trailing}</span>{/if}
+		{#if selected}<Check class="size-4 shrink-0" />{/if}
+	</button>
+{/snippet}
+
 <section
 	bind:this={card}
 	tabindex="-1"
-	class="no-drag border-border bg-popover w-full max-w-md rounded-md border shadow-lg outline-none {desktop ? '' : ''}"
+	class="no-drag bg-popover text-popover-foreground shadow-float w-full max-w-lg overflow-hidden rounded-2xl border outline-none {desktop
+		? ''
+		: 'animate-in zoom-in-95 fade-in duration-150'}"
 >
-	<div class="drag flex items-center justify-between px-4 pt-3">
-		<p class="text-muted-foreground flex items-center gap-1.5 text-xs">
-			{#if kind === 'task'}
-				<SquarePen class="size-3.5" /> Aufgabe
-			{:else}
-				<NotebookPen class="size-3.5" /> Notiz
-			{/if}
-			· Tab wechselt
-		</p>
-		<button type="button" class="no-drag text-muted-foreground" onclick={() => onDone?.()}>
-			<X class="size-4" />
-		</button>
+	<div class="drag flex items-center justify-between gap-3 border-b px-3 py-2.5">
+		<div class="no-drag seg">
+			<button type="button" aria-pressed={kind === 'task'} onclick={() => (kind = 'task')}>Aufgabe</button>
+			<button type="button" aria-pressed={kind === 'note'} onclick={() => (kind = 'note')}>Notiz</button>
+		</div>
+		<div class="flex items-center gap-3">
+			<div class="flex items-center gap-1" aria-label="Schritt {stepIndex + 1} von {stepTotal}">
+				{#each Array(stepTotal) as _, index}
+					<span
+						class="h-1.5 rounded-full transition-all duration-200 {index === stepIndex
+							? 'bg-foreground w-4'
+							: index < stepIndex
+								? 'bg-foreground/50 w-1.5'
+								: 'bg-border w-1.5'}"
+					></span>
+				{/each}
+			</div>
+			<button type="button" class="no-drag btn btn-ghost btn-icon size-8" onclick={() => onDone?.()} aria-label="Schließen">
+				<X class="size-4" />
+			</button>
+		</div>
 	</div>
 
-	<div class="space-y-3 px-4 pt-2 pb-3">
+	<div class="space-y-3 px-4 pt-4 pb-3">
+		{#if step !== 'title'}
+			<p class="text-muted-foreground truncate px-1 text-xs">
+				<span class="text-foreground font-medium">{title}</span>
+				{#if chosenSubject && (step === 'remind' || step === 'custom')} · {chosenSubject}{/if}
+			</p>
+		{/if}
+
 		{#if step === 'title'}
 			<input
 				bind:this={field}
 				bind:value={title}
-				placeholder={kind === 'task' ? 'Was ist zu tun?' : 'Notiz'}
-				class="placeholder:text-muted-foreground w-full bg-transparent text-2xl font-semibold tracking-tight outline-none"
+				placeholder={kind === 'task' ? 'Was ist zu tun?' : 'Worum geht es?'}
+				class="placeholder:text-muted-foreground/70 w-full bg-transparent px-1 py-1 text-2xl font-semibold tracking-[-0.02em] outline-none"
 			/>
 		{:else if step === 'details'}
-			<p class="text-lg font-semibold tracking-tight">{title}</p>
 			<textarea
 				bind:this={field}
 				bind:value={details}
-				rows="3"
-				placeholder="Details, optional"
-				class="placeholder:text-muted-foreground w-full resize-none bg-transparent text-sm outline-none"
+				rows="4"
+				placeholder="Details, Seiten, Nummern … (optional)"
+				class="placeholder:text-muted-foreground w-full resize-none bg-transparent px-1 text-[15px] leading-7 outline-none"
 			></textarea>
 		{:else if step === 'attach'}
-			<p class="text-muted-foreground text-xs">Tab wechselt · Enter bestätigt</p>
-			<button
-				type="button"
-				class="w-full rounded-md px-3 py-2 text-left text-sm {attach
-					? 'bg-primary text-primary-foreground'
-					: 'text-muted-foreground hover:text-foreground'}"
-				onclick={() => {
-					attach = true;
-					advance();
-				}}
-			>
-				An Fach anheften
-			</button>
-			<button
-				type="button"
-				class="w-full rounded-md px-3 py-2 text-left text-sm {!attach
-					? 'bg-primary text-primary-foreground'
-					: 'text-muted-foreground hover:text-foreground'}"
-				onclick={() => {
+			<div class="space-y-1">
+				{@render option(
+					'An Fach anheften',
+					now ? `Gerade: ${now.subject}` : todaySubjects.length ? `${todaySubjects.length} Fächer heute` : 'Aus allen Fächern wählen',
+					attach,
+					() => {
+						attach = true;
+						advance();
+					}
+				)}
+				{@render option('Nicht anheften', 'Ohne Fach speichern', !attach, () => {
 					attach = false;
 					advance();
-				}}
-			>
-				Nicht anheften
-			</button>
+				})}
+			</div>
 		{:else if step === 'pick'}
-			<p class="text-muted-foreground text-xs">Heute · Tab weiter</p>
-			<div class="flex max-h-52 flex-col gap-0.5 overflow-y-auto">
+			<p class="eyebrow px-1">Heute · {WEEKDAYS[weekday]}</p>
+			<div class="max-h-64 space-y-1 overflow-y-auto">
 				{#each todaySubjects as subject, index}
-					<button
-						type="button"
-						class="rounded-md px-3 py-1.5 text-left text-sm {pickIndex === index
-							? 'bg-primary text-primary-foreground'
-							: 'text-muted-foreground hover:text-foreground'}"
-						onclick={() => {
+					{@render option(
+						subject,
+						now?.subject === subject ? 'Läuft gerade' : '',
+						pickIndex === index,
+						() => {
 							pickIndex = index;
 							attach = true;
 							goAfterSubject();
-						}}
-					>
-						{subject}
-						{#if now?.subject === subject}
-							<span class="opacity-70"> jetzt {formatMin(now.startMin)}</span>
-						{/if}
-					</button>
+						},
+						now?.subject === subject ? 'jetzt' : lessonTime(subject)
+					)}
 				{/each}
 				<button
 					type="button"
-					class="rounded-md px-3 py-1.5 text-left text-sm {pickIndex === todaySubjects.length
+					class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left {pickIndex === todaySubjects.length
 						? 'bg-primary text-primary-foreground'
-						: 'text-muted-foreground hover:text-foreground'}"
+						: 'hover:bg-accent text-muted-foreground'}"
 					onclick={() => {
 						pickIndex = todaySubjects.length;
 						otherIndex = 0;
 						step = 'other';
 					}}
 				>
-					Anderes Fach
+					<span class="flex-1 text-sm font-medium">Anderes Fach …</span>
+					<ArrowRight class="size-4" />
 				</button>
 			</div>
 		{:else if step === 'other'}
-			<p class="text-muted-foreground text-xs">Alle Fächer · Tab weiter</p>
-			<div class="flex max-h-52 flex-col gap-0.5 overflow-y-auto">
+			<p class="eyebrow px-1">Alle Fächer</p>
+			<div class="max-h-64 space-y-1 overflow-y-auto">
 				{#each allSubjects as subject, index}
-					<button
-						type="button"
-						class="rounded-md px-3 py-1.5 text-left text-sm {otherIndex === index
-							? 'bg-primary text-primary-foreground'
-							: 'text-muted-foreground hover:text-foreground'}"
-						onclick={() => {
-							otherIndex = index;
-							attach = true;
-							goAfterSubject();
-						}}
-					>
-						{subject}
-					</button>
+					{@render option(subject, '', otherIndex === index, () => {
+						otherIndex = index;
+						attach = true;
+						goAfterSubject();
+					})}
 				{/each}
 			</div>
 		{:else if step === 'remind'}
-			<div class="flex flex-col gap-1">
-				{#each remindOptions as option, index}
-					<button
-						type="button"
-						class="rounded-md px-2 py-1.5 text-left text-sm {index === remindIndex
-							? 'bg-primary text-primary-foreground'
-							: 'text-muted-foreground hover:text-foreground'}"
-						onclick={() => {
-							remindIndex = index;
-							if (option.id === 'custom') step = 'custom';
-							else void finish();
-						}}
-					>
-						{option.label}
-					</button>
+			<p class="eyebrow px-1">Erinnern</p>
+			<div class="space-y-1">
+				{#each remindOptions as item, index}
+					{@render option(item.label, item.hint, index === remindIndex, () => {
+						remindIndex = index;
+						if (item.id === 'custom') step = 'custom';
+						else void finish();
+					})}
 				{/each}
 			</div>
-			<p class="text-muted-foreground text-xs">
-				{#if previewAt}{formatWhen(previewAt.toISOString())}{:else}Ohne Erinnerung{/if}
+			<p class="text-muted-foreground px-1 text-xs">
+				{#if previewAt}Erinnerung: <span class="text-foreground tabular font-medium">{formatWhen(previewAt.toISOString())}</span>{:else}Ohne Erinnerung{/if}
 			</p>
 		{:else}
-			<input bind:this={field} bind:value={custom} type="datetime-local" class="w-full bg-transparent text-sm outline-none" />
+			<p class="eyebrow px-1">Datum und Uhrzeit</p>
+			<input bind:this={field} bind:value={custom} type="datetime-local" class="field h-11" />
 		{/if}
 
 		{#if kind === 'task' && files.length}
-			<p class="text-muted-foreground truncate text-xs">{files.map((file) => file.name).join(', ')}</p>
+			<p class="text-muted-foreground flex items-center gap-1.5 truncate px-1 text-xs">
+				<Paperclip class="size-3.5 shrink-0" />{files.map((file) => file.name).join(', ')}
+			</p>
 		{/if}
 	</div>
 
-	<footer class="text-muted-foreground flex items-center justify-between border-t px-4 py-2 text-[11px]">
+	<footer class="bg-muted/50 text-muted-foreground flex items-center justify-between gap-3 border-t px-4 py-2 text-[11px]">
 		{#if kind === 'task'}
-			<button type="button" class="no-drag inline-flex items-center gap-1" onclick={() => fileInput?.click()}>
-				<Paperclip class="size-3.5" /> Datei
+			<button type="button" class="no-drag hover:text-foreground inline-flex items-center gap-1.5" onclick={() => fileInput?.click()}>
+				<Paperclip class="size-3.5" /> Datei <span class="kbd">Strg O</span>
 			</button>
 			<input bind:this={fileInput} class="hidden" type="file" multiple onchange={(event) => addFiles(event.currentTarget.files)} />
 		{:else}
 			<span></span>
 		{/if}
-		<p>{saving ? '…' : 'Enter · Esc'}</p>
+		<p class="flex items-center gap-2.5">
+			{#if saving}
+				Speichert …
+			{:else}
+				{#if tabHint}<span class="flex items-center gap-1"><span class="kbd">Tab</span> {tabHint}</span>{/if}
+				<span class="flex items-center gap-1"><span class="kbd">Enter</span> weiter</span>
+				<span class="flex items-center gap-1"><span class="kbd">Esc</span> {step === 'title' ? 'schließen' : 'zurück'}</span>
+			{/if}
+		</p>
 	</footer>
 </section>

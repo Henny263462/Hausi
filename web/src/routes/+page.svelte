@@ -8,4 +8,6 @@
 	});
 </script>
 
-<p class="text-muted-foreground p-8 text-sm">Einen Moment…</p>
+<div class="grid min-h-screen place-items-center">
+	<span class="bg-primary text-primary-foreground grid size-10 animate-pulse place-items-center rounded-xl font-bold">H</span>
+</div>
