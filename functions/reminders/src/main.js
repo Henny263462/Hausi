@@ -83,6 +83,19 @@ export default async ({ req, res, log, error }) => {
 					log(String(cause));
 				}
 			}
+			try {
+				const linked = await api(
+					`/tablesdb/hausi/tables/shares/rows?${query([
+						{ method: 'equal', attribute: 'taskId', values: [row.$id] },
+						{ method: 'limit', values: [5] }
+					])}`
+				);
+				for (const share of linked.rows ?? []) {
+					await api(`/tablesdb/hausi/tables/shares/rows/${share.$id}`, { method: 'DELETE' });
+				}
+			} catch (cause) {
+				log(String(cause));
+			}
 			await api(`/tablesdb/hausi/tables/tasks/rows/${row.$id}`, { method: 'DELETE' });
 			expired += 1;
 		}

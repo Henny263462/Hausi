@@ -1,19 +1,18 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
-	import Download from '@lucide/svelte/icons/download';
-	import Paperclip from '@lucide/svelte/icons/paperclip';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
+	import { Switch } from '$lib/components/ui/switch';
 	import { daysLeft, formatWhen } from '$lib/schedule';
 	import { hausi } from '$lib/store.svelte';
 
 	const task = $derived(hausi.tasks.find((item) => item.$id === page.params.id));
+	const share = $derived(task ? hausi.shareOf(task.$id) : null);
 	let title = $state('');
 	let details = $state('');
 	let loaded = $state('');
+	let sharing = $state(false);
+	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	$effect(() => {
 		if (!task || loaded === task.$id) return;
@@ -22,33 +21,64 @@
 		loaded = task.$id;
 	});
 
+	function queueSave() {
+		clearTimeout(timer);
+		timer = setTimeout(() => void save(), 400);
+	}
+
 	async function save() {
 		if (!task || task.pending) return;
+		if (title === task.title && details === task.details) return;
 		await hausi.updateTask(task.$id, { title, details });
-		hausi.ping('Gespeichert.');
+	}
+
+	async function toggleShare(next: boolean) {
+		if (!task || sharing) return;
+		sharing = true;
+		try {
+			if (next) {
+				const url = await hausi.shareTask({ ...task, title, details });
+				if (url) {
+					await navigator.clipboard.writeText(url);
+					hausi.ping('Link kopiert.');
+				}
+			} else {
+				await hausi.revokeShare(task);
+			}
+		} finally {
+			sharing = false;
+		}
 	}
 </script>
 
 {#if !task}
-	<p class="text-muted-foreground text-sm">Diese Aufgabe gibt es nicht.</p>
+	<p class="text-muted-foreground text-sm">Nicht gefunden.</p>
 {:else}
-	<div class="mx-auto max-w-2xl space-y-4 pb-24">
-		<a class="text-muted-foreground inline-flex items-center gap-1 text-sm" href="/app/aufgaben">
-			<ArrowLeft class="size-4" /> Zurück
-		</a>
-		<Input bind:value={title} class="font-serif h-12 text-2xl" />
-		<Textarea bind:value={details} rows={6} />
+	<div class="space-y-5">
+		<a class="text-muted-foreground text-xs" href="/app/aufgaben">← Aufgaben</a>
+		<input
+			bind:value={title}
+			oninput={queueSave}
+			class="w-full bg-transparent text-xl font-semibold tracking-tight outline-none"
+		/>
+		<textarea
+			bind:value={details}
+			oninput={queueSave}
+			rows={8}
+			placeholder="Details"
+			class="placeholder:text-muted-foreground w-full resize-none bg-transparent text-sm leading-6 outline-none"
+		></textarea>
 		<p class="text-muted-foreground text-xs">
 			{task.subject || 'Ohne Fach'}
-			{#if task.remindAt} · E-Mail {formatWhen(task.remindAt)}{/if}
-			{#if daysLeft(task.expiresAt) !== null} · noch {daysLeft(task.expiresAt)} Tage gespeichert{/if}
+			{#if task.remindAt} · {formatWhen(task.remindAt)}{/if}
+			{#if daysLeft(task.expiresAt) !== null} · {daysLeft(task.expiresAt)} Tage{/if}
 		</p>
-		<div class="flex flex-wrap gap-2">
-			<Button onclick={save} disabled={task.pending}>Speichern</Button>
-			<Button variant="outline" onclick={() => hausi.toggleTask(task)}>
+		<div class="flex flex-wrap items-center gap-2">
+			<Button size="sm" variant="secondary" onclick={() => hausi.toggleTask(task)}>
 				{task.done ? 'Wieder öffnen' : 'Erledigt'}
 			</Button>
 			<Button
+				size="sm"
 				variant="ghost"
 				onclick={async () => {
 					await hausi.deleteTask(task);
@@ -56,20 +86,29 @@
 				}}>Löschen</Button
 			>
 		</div>
-		<section class="bg-card rounded-3xl border p-4">
-			<p class="mb-3 flex items-center gap-2 text-sm font-medium"><Paperclip class="size-4" /> Dateien</p>
-			<ul class="space-y-2">
+		<div class="flex items-center justify-between gap-3 border-t pt-4">
+			<div>
+				<p class="text-sm">Teilen</p>
+				{#if share}
+					<button type="button" class="text-muted-foreground text-xs underline-offset-2 hover:underline" onclick={() => navigator.clipboard.writeText(hausi.shareLink(share.$id))}>
+						Link kopieren
+					</button>
+				{/if}
+			</div>
+			<Switch checked={!!share} disabled={sharing || task.pending} onCheckedChange={(value) => toggleShare(!!value)} />
+		</div>
+		<div class="border-t pt-4">
+			<p class="mb-2 text-sm">Dateien</p>
+			<ul class="space-y-1 text-sm">
 				{#each task.fileIds as fileId}
 					<li>
-						<button type="button" class="text-primary inline-flex items-center gap-2 text-sm" onclick={() => hausi.downloadFile(fileId)}>
-							<Download class="size-4" /> {fileId}
-						</button>
+						<button type="button" class="underline-offset-2 hover:underline" onclick={() => hausi.downloadFile(fileId)}>{fileId}</button>
 					</li>
 				{:else}
-					<li class="text-muted-foreground text-sm">Noch kein Anhang.</li>
+					<li class="text-muted-foreground text-xs">Keine.</li>
 				{/each}
 			</ul>
-			<label class="mt-3 inline-block">
+			<label class="mt-2 inline-block">
 				<input
 					class="hidden"
 					type="file"
@@ -81,8 +120,8 @@
 						event.currentTarget.value = '';
 					}}
 				/>
-				<span class="border-input inline-flex cursor-pointer rounded-xl border px-3 py-2 text-sm">Datei anhängen</span>
+				<span class="text-muted-foreground cursor-pointer text-xs underline-offset-2 hover:underline">Anhängen</span>
 			</label>
-		</section>
+		</div>
 	</div>
 {/if}

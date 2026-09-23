@@ -13,6 +13,8 @@ declare global {
 		hausiDesktop?: {
 			closeCapture: () => void;
 			openCapture: () => void;
+			getHotkey?: () => Promise<string>;
+			setHotkey?: (value: string) => Promise<string>;
 		};
 	}
 }

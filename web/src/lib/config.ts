@@ -8,7 +8,8 @@ export const TABLES = {
 	timetables: 'timetables',
 	lessons: 'lessons',
 	tasks: 'tasks',
-	notes: 'notes'
+	notes: 'notes',
+	shares: 'shares'
 } as const;
 
 /** Aufgaben ohne Premium bleiben zwei Monate. */

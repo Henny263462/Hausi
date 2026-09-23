@@ -2,5 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('hausiDesktop', {
 	openCapture: () => ipcRenderer.send('open-capture'),
-	closeCapture: () => ipcRenderer.send('close-capture')
+	closeCapture: () => ipcRenderer.send('close-capture'),
+	getHotkey: () => ipcRenderer.invoke('get-hotkey'),
+	setHotkey: (value) => ipcRenderer.invoke('set-hotkey', value)
 });

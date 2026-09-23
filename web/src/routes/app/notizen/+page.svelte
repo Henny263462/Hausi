@@ -1,15 +1,11 @@
 <script lang="ts">
-	import Plus from '@lucide/svelte/icons/plus';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
 	import { hausi } from '$lib/store.svelte';
 	import type { Note } from '$lib/types';
 
 	let selected = $state<string | null>(null);
 	let title = $state('');
 	let body = $state('');
-	let subject = $state('');
+	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	const current = $derived(hausi.notes.find((note) => note.$id === selected) ?? null);
 
@@ -17,56 +13,52 @@
 		if (!current) return;
 		title = current.title;
 		body = current.body;
-		subject = current.subject;
 	});
 
-	function openNew() {
-		if (window.hausiDesktop) window.hausiDesktop.openCapture();
-		else hausi.captureOpen = true;
-	}
-
-	async function save(note: Note) {
-		if (note.pending) return;
-		await hausi.updateNote(note.$id, { title, body, subject });
-		hausi.ping('Notiz gespeichert.');
+	function queueSave(note: Note) {
+		clearTimeout(timer);
+		timer = setTimeout(async () => {
+			if (note.pending) return;
+			await hausi.updateNote(note.$id, { title, body, subject: note.subject });
+		}, 400);
 	}
 </script>
 
-<div class="grid gap-4 pb-24 md:grid-cols-[240px_1fr] md:pb-8">
+<div class="grid gap-6 sm:grid-cols-[11rem_1fr]">
 	<div>
-		<div class="mb-3 flex items-center justify-between">
-			<h1 class="font-serif text-3xl">Notizen</h1>
-			<Button size="icon" variant="outline" onclick={openNew} disabled={!hausi.hasSchedule}><Plus class="size-4" /></Button>
-		</div>
-		{#if !hausi.hasSchedule}
-			<p class="text-muted-foreground text-sm">Notizen gibt es, sobald ein Stundenplan steht.</p>
-		{/if}
-		<div class="space-y-1">
+		<h1 class="text-xl font-semibold tracking-tight">Notizen</h1>
+		<div class="mt-3 space-y-0.5">
 			{#each hausi.notes as note}
 				<button
 					type="button"
-					class="w-full rounded-2xl px-3 py-2 text-left text-sm {selected === note.$id ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}"
+					class="w-full truncate rounded-md px-2 py-1.5 text-left text-sm {selected === note.$id
+						? 'bg-primary text-primary-foreground'
+						: 'text-muted-foreground hover:text-foreground'}"
 					onclick={() => (selected = note.$id)}
 				>
-					<span class="block truncate font-medium">{note.title}</span>
-					<span class="block truncate text-xs opacity-70">{note.subject || 'Ohne Fach'}</span>
+					{note.title}
 				</button>
 			{:else}
-				<p class="text-muted-foreground text-sm">Noch keine Notiz.</p>
+				<p class="text-muted-foreground text-sm">Keine.</p>
 			{/each}
 		</div>
 	</div>
 	{#if current}
-		<div class="bg-card space-y-3 rounded-3xl border p-4">
-			<Input bind:value={title} class="font-serif text-xl" />
-			<Input bind:value={subject} placeholder="Fach, optional" />
-			<Textarea bind:value={body} rows={12} />
-			<div class="flex gap-2">
-				<Button onclick={() => save(current)} disabled={current.pending}>Speichern</Button>
-				<Button variant="ghost" onclick={() => hausi.deleteNote(current)}>Löschen</Button>
-			</div>
+		<div>
+			<input
+				bind:value={title}
+				oninput={() => queueSave(current)}
+				class="w-full bg-transparent text-lg font-semibold outline-none"
+			/>
+			<textarea
+				bind:value={body}
+				oninput={() => queueSave(current)}
+				rows={14}
+				class="mt-3 w-full resize-none bg-transparent text-sm leading-6 outline-none"
+			></textarea>
+			<button type="button" class="text-muted-foreground mt-2 text-xs" onclick={() => hausi.deleteNote(current)}>Löschen</button>
 		</div>
 	{:else}
-		<p class="text-muted-foreground self-center text-sm">Wähle eine Notiz oder leg eine neue an.</p>
+		<p class="text-muted-foreground self-start pt-8 text-sm">Eine Notiz wählen oder + drücken.</p>
 	{/if}
 </div>

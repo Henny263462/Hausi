@@ -8,11 +8,18 @@ export type Profile = {
 	activeTimetableId: string;
 };
 
+export type Period = {
+	label: string;
+	startMin: number;
+	endMin: number;
+};
+
 export type Timetable = {
 	$id: string;
 	userId: string;
 	name: string;
 	active: boolean;
+	periods: Period[];
 };
 
 export type Lesson = {
@@ -43,6 +50,16 @@ export type Task = {
 	expiresAt: string | null;
 	fileIds: string[];
 	pending?: boolean;
+};
+
+export type Share = {
+	$id: string;
+	userId: string;
+	taskId: string;
+	title: string;
+	details: string;
+	subject: string;
+	fileIds: string[];
 };
 
 export type Note = {

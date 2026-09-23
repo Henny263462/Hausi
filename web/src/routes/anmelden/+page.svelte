@@ -1,7 +1,5 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import BookOpenCheck from '@lucide/svelte/icons/book-open-check';
-	import Mail from '@lucide/svelte/icons/mail';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
@@ -31,7 +29,7 @@
 			error = message.includes('Invalid credentials')
 				? 'E-Mail oder Passwort stimmt nicht.'
 				: message.includes('already')
-					? 'Diese E-Mail gibt es schon. Melde dich an.'
+					? 'Diese E-Mail gibt es schon.'
 					: message;
 		} finally {
 			pending = false;
@@ -39,46 +37,44 @@
 	}
 </script>
 
-<div class="mx-auto grid min-h-screen max-w-5xl items-center gap-10 px-6 py-12 md:grid-cols-2">
-	<div>
-		<p class="text-primary mb-3 inline-flex items-center gap-2 text-sm font-medium">
-			<BookOpenCheck class="size-4" /> Hausi
-		</p>
-		<h1 class="font-serif text-5xl leading-tight">Hausaufgaben, solange die Stunde noch frisch ist.</h1>
-		<p class="text-muted-foreground mt-4 max-w-md text-base">
-			Stundenplan einmal anlegen, dann Aufgabe eintippen. Tab, Enter, fertig. Ohne Internet wartet alles in der Warteschlange, die Erinnerung kommt per E-Mail.
+<div class="mx-auto grid min-h-screen max-w-4xl items-center gap-12 px-6 py-12 md:grid-cols-2">
+	<div class="hidden md:block">
+		<p class="text-xs font-semibold tracking-widest uppercase">Hausi</p>
+		<h1 class="mt-3 text-4xl font-semibold tracking-tight">Stundenplan, Aufgabe, fertig.</h1>
+		<p class="text-muted-foreground mt-3 max-w-sm text-sm leading-6">
+			Einmal den Plan setzen. Danach Strg+Alt+H, Titel, Enter. Die nächste Stunde hängt automatisch an, wenn du gerade in einer bist.
 		</p>
 	</div>
-
-	<form class="bg-card space-y-4 rounded-3xl border p-6 shadow-sm" onsubmit={submit}>
-		<div class="bg-muted grid grid-cols-2 rounded-2xl p-1 text-sm">
-			<button type="button" class="rounded-xl px-3 py-2 {mode === 'login' ? 'bg-card shadow-xs' : ''}" onclick={() => (mode = 'login')}>
-				Anmelden
+	<form class="mx-auto w-full max-w-sm space-y-4" onsubmit={submit}>
+		<div class="md:hidden">
+			<p class="text-xs font-semibold tracking-widest uppercase">Hausi</p>
+			<h1 class="mt-2 text-2xl font-semibold tracking-tight">{mode === 'login' ? 'Anmelden' : 'Konto'}</h1>
+		</div>
+		<div class="bg-muted flex rounded-md p-1 text-sm">
+			<button type="button" class="flex-1 rounded-sm py-1.5 {mode === 'login' ? 'bg-background' : 'text-muted-foreground'}" onclick={() => (mode = 'login')}>
+				Login
 			</button>
-			<button type="button" class="rounded-xl px-3 py-2 {mode === 'register' ? 'bg-card shadow-xs' : ''}" onclick={() => (mode = 'register')}>
-				Konto erstellen
+			<button type="button" class="flex-1 rounded-sm py-1.5 {mode === 'register' ? 'bg-background' : 'text-muted-foreground'}" onclick={() => (mode = 'register')}>
+				Konto
 			</button>
 		</div>
 		{#if mode === 'register'}
-			<div class="space-y-2">
+			<div class="space-y-1.5">
 				<Label for="name">Name</Label>
-				<Input id="name" bind:value={name} required placeholder="Henny" />
+				<Input id="name" bind:value={name} required placeholder="Vorname" autocomplete="name" />
 			</div>
 		{/if}
-		<div class="space-y-2">
+		<div class="space-y-1.5">
 			<Label for="email">E-Mail</Label>
-			<Input id="email" type="email" bind:value={email} required placeholder="du@schule.de" />
+			<Input id="email" type="email" bind:value={email} required placeholder="du@schule.de" autocomplete="email" />
 		</div>
-		<div class="space-y-2">
+		<div class="space-y-1.5">
 			<Label for="password">Passwort</Label>
-			<Input id="password" type="password" bind:value={password} required minlength={8} placeholder="Mindestens 8 Zeichen" />
+			<Input id="password" type="password" bind:value={password} required minlength={8} placeholder="Mindestens 8 Zeichen" autocomplete={mode === 'login' ? 'current-password' : 'new-password'} />
 		</div>
 		{#if error}
 			<p class="text-destructive text-sm">{error}</p>
 		{/if}
-		<Button type="submit" class="w-full" disabled={pending}>
-			<Mail class="size-4" />
-			{pending ? 'Bitte warten…' : mode === 'login' ? 'Rein da' : 'Konto anlegen'}
-		</Button>
+		<Button type="submit" class="w-full" disabled={pending}>{pending ? 'Einen Moment…' : mode === 'login' ? 'Rein' : 'Konto anlegen'}</Button>
 	</form>
 </div>

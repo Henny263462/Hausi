@@ -17,29 +17,14 @@
 	});
 </script>
 
-<div class="flex min-h-screen items-start justify-center bg-transparent p-3 pt-4">
+<div class="flex min-h-screen items-start justify-center p-3 pt-4">
 	{#if !hausi.ready}
-		<p class="text-sm">Lädt…</p>
+		<p class="text-sm">…</p>
 	{:else if !hausi.user}
-		<section class="bg-card w-full max-w-md rounded-3xl border p-5 shadow-2xl">
-			<h1 class="font-serif text-2xl">Erst anmelden</h1>
-			<p class="text-muted-foreground mt-2 text-sm">Melde dich im Hauptfenster an. Danach kannst du hier direkt erfassen.</p>
-			<button type="button" class="text-primary mt-4 text-sm" onclick={close}>Schließen</button>
-		</section>
+		<p class="text-sm">Erst im Hauptfenster anmelden. <button type="button" class="underline" onclick={close}>Schließen</button></p>
 	{:else if !hausi.hasSchedule}
-		<section class="bg-card w-full max-w-md rounded-3xl border p-5 shadow-2xl">
-			<h1 class="font-serif text-2xl">Stundenplan fehlt</h1>
-			<p class="text-muted-foreground mt-2 text-sm">Leg im Hauptfenster zuerst einen Stundenplan an.</p>
-			<button type="button" class="text-primary mt-4 text-sm" onclick={close}>Schließen</button>
-		</section>
+		<p class="text-sm">Stundenplan fehlt. <button type="button" class="underline" onclick={close}>Schließen</button></p>
 	{:else}
 		<CaptureFlow desktop onDone={close} />
 	{/if}
 </div>
-
-<style>
-	:global(body.capture-mode) {
-		background: transparent !important;
-		background-image: none !important;
-	}
-</style>

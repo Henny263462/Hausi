@@ -10,6 +10,8 @@
 	});
 </script>
 
-{#if hausi.user}
+{#if !hausi.ready}
+	<p class="text-muted-foreground grid min-h-screen place-items-center text-sm">Hausi</p>
+{:else if hausi.user}
 	<Shell>{@render children()}</Shell>
 {/if}

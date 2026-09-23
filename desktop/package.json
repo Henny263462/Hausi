@@ -3,11 +3,48 @@
 	"private": true,
 	"version": "0.1.0",
 	"main": "main.cjs",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Henny263462/Hausi.git"
+	},
 	"scripts": {
 		"start": "electron .",
-		"dev": "set HAUSI_DEV=1&& electron ."
+		"dev": "set HAUSI_DEV=1&& electron .",
+		"pack": "electron-builder --win nsis",
+		"release": "electron-builder --win nsis --publish always"
 	},
 	"devDependencies": {
-		"electron": "^37.3.1"
+		"electron": "^37.3.1",
+		"electron-builder": "^26.0.12"
+	},
+	"dependencies": {
+		"electron-updater": "^6.6.2"
+	},
+	"build": {
+		"appId": "app.hausi.desktop",
+		"productName": "Hausi",
+		"files": [
+			"main.cjs",
+			"preload.cjs",
+			"tray.png",
+			"package.json"
+		],
+		"extraResources": [
+			{
+				"from": "../web/build",
+				"to": "web-build"
+			}
+		],
+		"directories": {
+			"output": "dist"
+		},
+		"win": {
+			"target": "nsis"
+		},
+		"publish": {
+			"provider": "github",
+			"owner": "Henny263462",
+			"repo": "Hausi"
+		}
 	}
 }

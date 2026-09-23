@@ -1,8 +1,9 @@
 import { ID, Permission, Query, Role } from 'appwrite';
-import { account, storage, tables } from './appwrite';
+import { account, Channel, realtime, storage, tables } from './appwrite';
 import { BUCKET_ID, DATABASE_ID, FREE_RETENTION_DAYS, TABLES } from './config';
 import { enqueue, listQueue, queueCount, removeQueued, type QueueOp } from './queue';
-import type { Lesson, LocalFile, Note, Profile, RemindMode, Task, Timetable } from './types';
+import { parsePeriods } from './schedule';
+import type { Lesson, LocalFile, Note, Period, Profile, RemindMode, Share, Task, Timetable } from './types';
 
 function own(userId: string) {
 	return [
@@ -39,6 +40,18 @@ function mapTask(row: Record<string, unknown>): Task {
 	};
 }
 
+function mapShare(row: Record<string, unknown>): Share {
+	return {
+		$id: asString(row.$id),
+		userId: asString(row.userId),
+		taskId: asString(row.taskId),
+		title: asString(row.title),
+		details: asString(row.details),
+		subject: asString(row.subject),
+		fileIds: Array.isArray(row.fileIds) ? row.fileIds.map(String) : []
+	};
+}
+
 function mapNote(row: Record<string, unknown>): Note {
 	return {
 		$id: asString(row.$id),
@@ -71,11 +84,14 @@ class HausiStore {
 	lessons = $state<Lesson[]>([]);
 	tasks = $state<Task[]>([]);
 	notes = $state<Note[]>([]);
+	shares = $state<Share[]>([]);
 	queued = $state(0);
-	toast = $state<{ text: string; tone: 'ok' | 'warn' } | null>(null);
+	toasts = $state<{ id: string; text: string; tone: 'ok' | 'warn' }[]>([]);
 	captureOpen = $state(false);
 	private flushing = false;
 	private started = false;
+	private live: { unsubscribe: () => Promise<void> } | null = null;
+	private liveTimer: ReturnType<typeof setTimeout> | undefined;
 
 	get activeTimetable() {
 		return (
@@ -117,14 +133,36 @@ class HausiStore {
 	}
 
 	ping(text: string, tone: 'ok' | 'warn' = 'ok') {
-		this.toast = { text, tone };
+		const id = crypto.randomUUID();
+		this.toasts = [...this.toasts.slice(-3), { id, text, tone }];
 		setTimeout(() => {
-			if (this.toast?.text === text) this.toast = null;
-		}, 3400);
+			this.toasts = this.toasts.filter((item) => item.id !== id);
+		}, 3200);
 	}
 
 	isExpired(task: Task) {
 		return !!task.expiresAt && new Date(task.expiresAt).getTime() < Date.now();
+	}
+
+	private async listen() {
+		await this.live?.unsubscribe().catch(() => undefined);
+		try {
+			this.live = await realtime.subscribe(
+				[
+					Channel.tablesdb(DATABASE_ID).table(TABLES.tasks).row(),
+					Channel.tablesdb(DATABASE_ID).table(TABLES.notes).row(),
+					Channel.tablesdb(DATABASE_ID).table(TABLES.lessons).row(),
+					Channel.tablesdb(DATABASE_ID).table(TABLES.timetables).row(),
+					Channel.tablesdb(DATABASE_ID).table(TABLES.shares).row()
+				],
+				() => {
+					clearTimeout(this.liveTimer);
+					this.liveTimer = setTimeout(() => void this.refresh(), 120);
+				}
+			);
+		} catch {
+			this.live = null;
+		}
 	}
 
 	async init() {
@@ -134,6 +172,7 @@ class HausiStore {
 			const user = await account.get();
 			this.user = { $id: user.$id, email: user.email, name: user.name };
 			await this.refresh();
+			await this.listen();
 			await this.flush();
 		} catch {
 			this.user = null;
@@ -146,7 +185,7 @@ class HausiStore {
 	async refresh() {
 		if (!this.user) return;
 		const userId = this.user.$id;
-		const [profiles, timetables, lessons, tasks, notes] = await Promise.all([
+		const [profiles, timetables, lessons, tasks, notes, shares] = await Promise.all([
 			tables.listRows({
 				databaseId: DATABASE_ID,
 				tableId: TABLES.profiles,
@@ -171,6 +210,11 @@ class HausiStore {
 				databaseId: DATABASE_ID,
 				tableId: TABLES.notes,
 				queries: [Query.equal('userId', userId), Query.orderDesc('$createdAt'), Query.limit(200)]
+			}),
+			tables.listRows({
+				databaseId: DATABASE_ID,
+				tableId: TABLES.shares,
+				queries: [Query.equal('userId', userId), Query.limit(200)]
 			})
 		]);
 
@@ -206,7 +250,8 @@ class HausiStore {
 				$id: asString(item.$id),
 				userId: asString(item.userId),
 				name: asString(item.name),
-				active: asBool(item.active)
+				active: asBool(item.active),
+				periods: parsePeriods(item.periods)
 			};
 		});
 		this.lessons = lessons.rows.map((row) => {
@@ -225,6 +270,7 @@ class HausiStore {
 		});
 		this.tasks = (tasks.rows as Record<string, unknown>[]).map(mapTask).filter((task) => !this.isExpired(task));
 		this.notes = (notes.rows as Record<string, unknown>[]).map(mapNote);
+		this.shares = (shares.rows as Record<string, unknown>[]).map(mapShare);
 	}
 
 	async register(name: string, email: string, password: string) {
@@ -237,9 +283,12 @@ class HausiStore {
 		const user = await account.get();
 		this.user = { $id: user.$id, email: user.email, name: user.name };
 		await this.refresh();
+		await this.listen();
 	}
 
 	async logout() {
+		await this.live?.unsubscribe().catch(() => undefined);
+		this.live = null;
 		await account.deleteSession({ sessionId: 'current' });
 		this.user = null;
 		this.profile = null;
@@ -247,6 +296,7 @@ class HausiStore {
 		this.lessons = [];
 		this.tasks = [];
 		this.notes = [];
+		this.shares = [];
 	}
 
 	async setPremium(premium: boolean) {
@@ -279,7 +329,7 @@ class HausiStore {
 			databaseId: DATABASE_ID,
 			tableId: TABLES.timetables,
 			rowId: ID.unique(),
-			data: { userId: this.user.$id, name, active },
+			data: { userId: this.user.$id, name, active, periods: '[]' },
 			permissions: own(this.user.$id)
 		});
 		if (active && this.profile) {
@@ -299,6 +349,16 @@ class HausiStore {
 			tableId: TABLES.timetables,
 			rowId: id,
 			data: { name }
+		});
+		await this.refresh();
+	}
+
+	async savePeriods(id: string, periods: Period[]) {
+		await tables.updateRow({
+			databaseId: DATABASE_ID,
+			tableId: TABLES.timetables,
+			rowId: id,
+			data: { periods: JSON.stringify(periods) }
 		});
 		await this.refresh();
 	}
@@ -474,8 +534,96 @@ class HausiStore {
 		}
 	}
 
+	shareOf(taskId: string) {
+		return this.shares.find((share) => share.taskId === taskId) ?? null;
+	}
+
+	shareLink(shareId: string) {
+		const origin = typeof location === 'undefined' ? 'https://hausi.appwrite.network' : location.origin;
+		return `${origin}/teilen/${shareId}`;
+	}
+
+	async shareTask(task: Task) {
+		if (!this.user || task.pending || task.$id.startsWith('local:')) return '';
+		const data = {
+			title: task.title,
+			details: task.details,
+			subject: task.subject,
+			fileIds: task.fileIds
+		};
+		const existing = this.shareOf(task.$id);
+		if (existing) {
+			await tables.updateRow({
+				databaseId: DATABASE_ID,
+				tableId: TABLES.shares,
+				rowId: existing.$id,
+				data
+			});
+			await this.publishFiles(task.fileIds, true);
+			this.shares = this.shares.map((share) => (share.$id === existing.$id ? { ...share, ...data } : share));
+			return this.shareLink(existing.$id);
+		}
+		const created = await tables.createRow({
+			databaseId: DATABASE_ID,
+			tableId: TABLES.shares,
+			rowId: ID.unique(),
+			data: { ...data, userId: this.user.$id, taskId: task.$id },
+			permissions: [
+				Permission.read(Role.any()),
+				Permission.update(Role.user(this.user.$id)),
+				Permission.delete(Role.user(this.user.$id))
+			]
+		});
+		await this.publishFiles(task.fileIds, true);
+		await this.refresh();
+		return this.shareLink(created.$id);
+	}
+
+	async revokeShare(task: Task) {
+		const existing = this.shareOf(task.$id);
+		if (!existing) return;
+		await tables.deleteRow({ databaseId: DATABASE_ID, tableId: TABLES.shares, rowId: existing.$id });
+		await this.publishFiles(task.fileIds, false);
+		this.shares = this.shares.filter((share) => share.$id !== existing.$id);
+	}
+
+	async loadShare(id: string): Promise<Share | null> {
+		try {
+			const row = await tables.getRow({ databaseId: DATABASE_ID, tableId: TABLES.shares, rowId: id });
+			return mapShare(row as Record<string, unknown>);
+		} catch {
+			return null;
+		}
+	}
+
+	async adoptShare(share: Share) {
+		await this.createTask({
+			title: share.title,
+			details: share.details,
+			subject: share.subject,
+			lessonId: '',
+			remindMode: 'none',
+			remindAt: null,
+			files: []
+		});
+	}
+
 	async updateTask(id: string, data: Partial<Pick<Task, 'title' | 'details' | 'subject' | 'done'>>) {
 		await tables.updateRow({ databaseId: DATABASE_ID, tableId: TABLES.tasks, rowId: id, data });
+		const share = this.shareOf(id);
+		if (share) {
+			const task = this.tasks.find((item) => item.$id === id);
+			await tables.updateRow({
+				databaseId: DATABASE_ID,
+				tableId: TABLES.shares,
+				rowId: share.$id,
+				data: {
+					title: data.title ?? task?.title ?? share.title,
+					details: data.details ?? task?.details ?? share.details,
+					subject: data.subject ?? task?.subject ?? share.subject
+				}
+			});
+		}
 		await this.refresh();
 	}
 
@@ -497,6 +645,16 @@ class HausiStore {
 			rowId: task.$id,
 			data: { fileIds: ids }
 		});
+		const share = this.shareOf(task.$id);
+		if (share) {
+			await tables.updateRow({
+				databaseId: DATABASE_ID,
+				tableId: TABLES.shares,
+				rowId: share.$id,
+				data: { fileIds: ids }
+			});
+			await this.publishFiles(ids, true);
+		}
 		await this.refresh();
 	}
 
@@ -617,7 +775,34 @@ class HausiStore {
 		});
 	}
 
+	private async publishFiles(fileIds: string[], shared: boolean) {
+		if (!this.user) return;
+		const permissions = shared
+			? [...own(this.user.$id), Permission.read(Role.any())]
+			: own(this.user.$id);
+		for (const fileId of fileIds) {
+			try {
+				await storage.updateFile({ bucketId: BUCKET_ID, fileId, permissions });
+			} catch {
+				/* Anhang kann schon weg sein */
+			}
+		}
+	}
+
 	private async removeTaskRemote(taskId: string, fileIds: string[]) {
+		try {
+			const found = await tables.listRows({
+				databaseId: DATABASE_ID,
+				tableId: TABLES.shares,
+				queries: [Query.equal('taskId', taskId), Query.limit(5)]
+			});
+			for (const row of found.rows) {
+				await tables.deleteRow({ databaseId: DATABASE_ID, tableId: TABLES.shares, rowId: row.$id });
+			}
+			this.shares = this.shares.filter((share) => share.taskId !== taskId);
+		} catch {
+			/* Freigabe kann schon weg sein */
+		}
 		for (const fileId of fileIds) {
 			try {
 				await storage.deleteFile({ bucketId: BUCKET_ID, fileId });

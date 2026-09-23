@@ -1,55 +1,73 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import Bell from '@lucide/svelte/icons/bell';
-	import Crown from '@lucide/svelte/icons/crown';
-	import Keyboard from '@lucide/svelte/icons/keyboard';
-	import LogOut from '@lucide/svelte/icons/log-out';
-	import { Button } from '$lib/components/ui/button';
+	import { onMount } from 'svelte';
+	import { Switch } from '$lib/components/ui/switch';
+	import { eventToAccelerator, formatHotkey, loadHotkey, saveHotkey } from '$lib/hotkey';
 	import { hausi } from '$lib/store.svelte';
+	import { setTheme, theme } from '$lib/theme.svelte';
+
+	let hotkey = $state(loadHotkey());
+	let recording = $state(false);
+	const desktop = $derived(typeof window !== 'undefined' && !!window.hausiDesktop);
+
+	onMount(() => {
+		void window.hausiDesktop?.getHotkey?.().then((value) => {
+			if (value) {
+				hotkey = value;
+				saveHotkey(value);
+			}
+		});
+	});
+
+	function onRecord(event: KeyboardEvent) {
+		if (!recording) return;
+		event.preventDefault();
+		const next = eventToAccelerator(event);
+		if (!next) return;
+		hotkey = next;
+		saveHotkey(next);
+		recording = false;
+		hausi.ping(`Hotkey: ${formatHotkey(next)}`);
+	}
 </script>
 
-<div class="max-w-xl space-y-4 pb-24">
-	<h1 class="font-serif text-4xl">Einstellungen</h1>
-	<section class="bg-card space-y-3 rounded-3xl border p-5">
-		<p class="text-sm font-medium">{hausi.user?.name}</p>
-		<p class="text-muted-foreground text-sm">{hausi.user?.email}</p>
-		<Button
-			variant="outline"
+<svelte:window onkeydown={onRecord} />
+
+<div class="space-y-6">
+	<h1 class="text-xl font-semibold tracking-tight">Mehr</h1>
+	<div>
+		<p class="text-sm">{hausi.user?.name}</p>
+		<p class="text-muted-foreground text-xs">{hausi.user?.email}</p>
+		<button
+			type="button"
+			class="mt-2 text-sm underline-offset-2 hover:underline"
 			onclick={async () => {
 				await hausi.logout();
 				goto('/anmelden');
-			}}
+			}}>Abmelden</button
 		>
-			<LogOut class="size-4" /> Abmelden
-		</Button>
-	</section>
-
-	<section class="bg-card space-y-3 rounded-3xl border p-5">
-		<p class="flex items-center gap-2 font-medium"><Crown class="size-4" /> Premium</p>
-		<p class="text-muted-foreground text-sm">
-			Ohne Premium löscht Hausi Aufgaben nach 2 Monaten, inklusive Anhängen. Notizen und der Stundenplan bleiben. Mit Premium bleiben Aufgaben erhalten.
-		</p>
-		<Button variant={hausi.profile?.premium ? 'default' : 'outline'} onclick={() => hausi.setPremium(!hausi.profile?.premium)}>
-			{hausi.profile?.premium ? 'Premium ist an' : 'Premium einschalten'}
-		</Button>
-	</section>
-
-	<section class="bg-card space-y-2 rounded-3xl border p-5 text-sm">
-		<p class="flex items-center gap-2 font-medium"><Keyboard class="size-4" /> Schnellerfassung unter Windows</p>
-		<p class="text-muted-foreground">Strg+Alt+H öffnet das Fenster ohne Rand.</p>
-		<ol class="text-muted-foreground list-decimal space-y-1 pl-4">
-			<li>Titel tippen. Tab wechselt zwischen Aufgabe und Notiz.</li>
-			<li>Enter öffnet die Details.</li>
-			<li>Enter, dann Tab: an ein Fach hängen oder nicht.</li>
-			<li>Enter: Erinnerung an die nächste Stunde, nächste Woche oder ein eigenes Datum.</li>
-			<li>Enter speichert. Ohne Internet landet es in der Warteschlange.</li>
-		</ol>
-	</section>
-
-	<section class="bg-card space-y-2 rounded-3xl border p-5 text-sm">
-		<p class="flex items-center gap-2 font-medium"><Bell class="size-4" /> E-Mail-Erinnerung</p>
-		<p class="text-muted-foreground">
-			Alle 15 Minuten prüft Appwrite fällige Aufgaben und schickt die Mail an deine Konto-Adresse. Dafür muss im Projekt Hauso unter Messaging ein E-Mail-Provider aktiv sein.
-		</p>
-	</section>
+	</div>
+	<div class="flex items-center justify-between gap-4">
+		<p class="text-sm">Dunkel</p>
+		<Switch checked={theme.mode === 'dark'} onCheckedChange={(value) => setTheme(value ? 'dark' : 'light')} />
+	</div>
+	<div class="flex items-center justify-between gap-4">
+		<div>
+			<p class="text-sm">Premium</p>
+			<p class="text-muted-foreground text-xs">Aufgaben bleiben, sonst 2 Monate.</p>
+		</div>
+		<Switch checked={!!hausi.profile?.premium} onCheckedChange={(value) => hausi.setPremium(!!value)} />
+	</div>
+	<div class="flex items-center justify-between gap-4">
+		<div>
+			<p class="text-sm">Hotkey</p>
+			<p class="text-muted-foreground text-xs">{desktop ? 'Öffnet die Schnellerfassung.' : 'Wirkt in der Windows-App.'}</p>
+		</div>
+		<button type="button" class="text-sm underline-offset-2 hover:underline" onclick={() => (recording = !recording)}>
+			{recording ? 'Taste drücken…' : formatHotkey(hotkey)}
+		</button>
+	</div>
+	<p class="text-muted-foreground text-xs leading-5">
+		Schließen legt Hausi in den Infobereich. Erinnerungen per E-Mail, sobald Messaging aktiv ist.
+	</p>
 </div>
